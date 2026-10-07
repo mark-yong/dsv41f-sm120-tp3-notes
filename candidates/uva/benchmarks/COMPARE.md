@@ -107,6 +107,26 @@ InstantTensor `URING` / `BUFFERED` abort on this unprivileged container
 
 No standalone 256k / 512k / 1M prefill on this engine.
 
+## 2026-10-08 #410 rebench
+
+Same recipe on
+`ghcr.io/local-inference-lab/vllm@sha256:edc0998c63df59eada70438b998dec60858a04d95c95541257c094e547ae591c`,
+DSpark off, ordinals 20–23, 8.13 GiB. `tp:0` came up as B12X PCIe oneshot
+(`['B12X_PCIE', 'PYNCCL']`). `ep:0` stayed PYNCCL. util 0.98 OOMed in
+b12x MLA preparation after placing 3,115,460 KV tokens. The measured boot
+is util 0.97, KV pool 2,101,050 tokens. Ordered bench 0 → 16k → 32k →
+128k, C=1, 30 s, 2,048 max tokens.
+
+| Context | Decode | Prefill (client) | September decode | September prefill |
+|---------|--------|------------------|------------------|-------------------|
+| 0 | 76.3 | — | 75.8 | — |
+| 16k | 75.9 | 4650 | 75.4 | 4508 |
+| 32k | 74.6 | 5274 | 74.8 | 4425 |
+| 128k | 74.5 | 4629 | 73.8 | 4319 |
+
+Decode did not move. The world-size-3 oneshot was not the decode limit
+on this box. DSpark was not enabled.
+
 ## Credits
 
 This run is a homelab reproduction. The recipe, image, kernels, and weights

@@ -1,14 +1,16 @@
 # Known issue: B12X PCIe all-reduce rejects world size 3
 
 Upstream issue: [local-inference-lab/b12x#410](https://github.com/local-inference-lab/b12x/issues/410)
-(open, filed 2026-09-21). Related PR:
+(closed 2026-10-05, filed 2026-09-21). Related PR:
 [b12x#297](https://github.com/local-inference-lab/b12x/pull/297) (world
 size 3 for the one-shot/DMA all-reduce, not merged).
 
-This affects the official-checkpoint UVA candidate on this repo, because
-that route runs the LIL r38 image whose MoE path uses the B12X kernel
-backend. The EXL3 candidate is unaffected (Tempo's custom all-reduce
-handles world 3 with the P2P override; it does not use B12X).
+This affected the official-checkpoint UVA candidate on the September r38
+image, whose MoE path uses the B12X kernel backend. The EXL3 candidate
+is unaffected (Tempo's custom all-reduce handles world 3 with the P2P
+override; it does not use B12X). A 2026-10-08 rebench on a later image
+selected B12X PCIe oneshot for `tp:0`; that result is at the bottom of
+this file, and decode did not change.
 
 ## What happens
 
@@ -81,6 +83,32 @@ The acceptance path from the issue, before any timing claim:
    TP3 decode cell.
 
 I offered to re-bench the r38 DS4.1 TP3 UVA C=1 path on this box once a
-pin lands. If it does, the decode rows in
-[benchmarks/COMPARE.md](benchmarks/COMPARE.md) get re-measured and this
-file records the delta.
+pin lands. That rebench ran on 2026-10-08. The decode rows did not move.
+The delta is in [benchmarks/COMPARE.md](benchmarks/COMPARE.md) and the
+root README.
+
+## Rebench (2026-10-08)
+
+Image `ghcr.io/local-inference-lab/vllm@sha256:edc0998c63df59eada70438b998dec60858a04d95c95541257c094e547ae591c`.
+Same `fb2764a5` checkpoint, same 8.13 GiB decoder-half offload, DSpark
+off. Boot log for `tp:0`:
+
+```
+Using B12X PCIe all-reduce (algorithm=oneshot, one-shot max=98304, ...)
+Using ['B12X_PCIE', 'PYNCCL'] all-reduce backends ... for group 'tp:0'
+```
+
+`ep:0` stayed `['PYNCCL']`. util 0.98 allocated 3,115,460 KV tokens and
+then b12x MLA preparation OOMed by about 128 MiB. The timed boot used
+util 0.97 and a KV pool of 2,101,050 tokens.
+
+| Context | Decode tok/s | Prefill tok/s | September decode | September prefill |
+|---------|--------------|---------------|------------------|-------------------|
+| 0 | 76.3 | — | 75.8 | — |
+| 16k | 75.9 | 4650 | 75.4 | 4508 |
+| 32k | 74.6 | 5274 | 74.8 | 4425 |
+| 128k | 74.5 | 4629 | 73.8 | 4319 |
+
+Decode stayed ~75 tok/s. On this box the world-size-3 oneshot did not
+account for the gap to the ~110 tok/s ceiling that a 40% PYNCCL share
+would have implied. DSpark stayed off.
