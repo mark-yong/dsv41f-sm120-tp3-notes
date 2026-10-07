@@ -5,17 +5,17 @@ Upstream issue: [local-inference-lab/b12x#410](https://github.com/local-inferenc
 [b12x#297](https://github.com/local-inference-lab/b12x/pull/297) (world
 size 3 for the one-shot/DMA all-reduce, not merged).
 
-This affected the official-checkpoint UVA candidate on the September r38
-image, whose MoE path uses the B12X kernel backend. The EXL3 candidate
-is unaffected (Tempo's custom all-reduce handles world 3 with the P2P
-override; it does not use B12X). A 2026-10-08 rebench on a later image
-selected B12X PCIe oneshot for `tp:0`; that result is at the bottom of
-this file, and decode did not change.
+This is what the September r38 image did on the official-checkpoint UVA
+candidate. That image's MoE path uses B12X, and B12X's PCIe all-reduce
+refused world size 3. The EXL3 candidate never hit this (Tempo's
+all-reduce handles world 3 with the P2P override; it does not use B12X).
+I re-ran UVA on 2026-10-08 on an image that does accept world size 3.
+That result is at the bottom. Decode came out the same.
 
 ## What happens
 
-On 3-GPU TP3, the B12X PCIe all-reduce never initializes and vLLM falls
-back to PYNCCL for both the `tp:0` and `ep:0` groups:
+On the r38 image, 3-GPU TP3 never gets the B12X PCIe all-reduce up, and
+vLLM falls back to PYNCCL for both the `tp:0` and `ep:0` groups:
 
 ```
 WARNING ... [b12x_pcie_all_reduce.py:223] B12X PCIe all-reduce
@@ -83,24 +83,25 @@ The acceptance path from the issue, before any timing claim:
    TP3 decode cell.
 
 I offered to re-bench the r38 DS4.1 TP3 UVA C=1 path on this box once a
-pin lands. That rebench ran on 2026-10-08. The decode rows did not move.
-The delta is in [benchmarks/COMPARE.md](benchmarks/COMPARE.md) and the
+pin landed. I did that on 2026-10-08. Decode came out the same. The
+numbers are in [benchmarks/COMPARE.md](benchmarks/COMPARE.md) and the
 root README.
 
 ## Rebench (2026-10-08)
 
 Image `ghcr.io/local-inference-lab/vllm@sha256:edc0998c63df59eada70438b998dec60858a04d95c95541257c094e547ae591c`.
 Same `fb2764a5` checkpoint, same 8.13 GiB decoder-half offload, DSpark
-off. Boot log for `tp:0`:
+still off. The boot log for `tp:0` was:
 
 ```
 Using B12X PCIe all-reduce (algorithm=oneshot, one-shot max=98304, ...)
 Using ['B12X_PCIE', 'PYNCCL'] all-reduce backends ... for group 'tp:0'
 ```
 
-`ep:0` stayed `['PYNCCL']`. util 0.98 allocated 3,115,460 KV tokens and
-then b12x MLA preparation OOMed by about 128 MiB. The timed boot used
-util 0.97 and a KV pool of 2,101,050 tokens.
+`ep:0` was still only PYNCCL. At util 0.98 the engine allocated
+3,115,460 KV tokens and then ran out of memory while b12x was preparing
+the MLA kernels, about 128 MiB short. I brought it back up at util 0.97.
+That one stayed up, with a KV pool of 2,101,050 tokens.
 
 | Context | Decode tok/s | Prefill tok/s | September decode | September prefill |
 |---------|--------------|---------------|------------------|-------------------|
@@ -109,6 +110,6 @@ util 0.97 and a KV pool of 2,101,050 tokens.
 | 32k | 74.6 | 5274 | 74.8 | 4425 |
 | 128k | 74.5 | 4629 | 73.8 | 4319 |
 
-Decode stayed ~75 tok/s. On this box the world-size-3 oneshot did not
-account for the gap to the ~110 tok/s ceiling that a 40% PYNCCL share
-would have implied. DSpark stayed off.
+Decode stayed around 75 tok/s. If PYNCCL had really been 40% of the step
+on this box, I would have expected something closer to 110. I didn't get
+that. DSpark stayed off.

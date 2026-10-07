@@ -46,24 +46,29 @@ Numbers are from `llm-inference-bench` sustained-decode runs with no other
 GPU workloads running. Community figures (Pete's Gen5 gist) are cited with
 their provenance, never mixed with my own measurements.
 
-One shared bottleneck on the September r38 image: the B12X PCIe
-all-reduce rejects world size 3, so TP3 falls back to PYNCCL (roughly 40%
-of decode kernel time per Pete's measurement). Upstream issue and the
-acceptance path for a fix:
+One shared bottleneck worth knowing, on the September r38 image: B12X's
+PCIe all-reduce rejects world size 3, so TP3 falls back to PYNCCL. Pete
+measured that collective at roughly 40% of decode kernel time on his
+box. Writeup:
 [b12x-410-pcie-ar-world3.md](candidates/uva/b12x-410-pcie-ar-world3.md).
+I re-ran the same UVA recipe once a newer image actually accepted world
+size 3. Decode did not budge.
 
-## #410 rebench (2026-10-08)
+## Rebench after #410 (2026-10-08)
 
-Same box, same official `fb2764a5` checkpoint, same 8.13 GiB decoder-half
-offload (ordinals 20–23), DSpark off. The image is
+I kept everything else the same: official `fb2764a5`, 8.13 GiB of
+decoder-half experts offloaded (ordinals 20–23), DSpark off. Image:
 `ghcr.io/local-inference-lab/vllm@sha256:edc0998c63df59eada70438b998dec60858a04d95c95541257c094e547ae591c`.
-`tp:0` came up as B12X PCIe oneshot, with PYNCCL still in the dispatch
-list behind it. `ep:0` stayed PYNCCL.
 
-util 0.98 placed 3,115,460 KV tokens and then ran out of memory during
-b12x MLA preparation (about 128 MiB short). The measured boot is util
-0.97, KV pool 2,101,050 tokens (1.94 GiB available). Ordered C=1 bench,
-30 s, 2,048 max tokens, contexts 0 → 16k → 32k → 128k.
+This time `tp:0` came up on the B12X PCIe oneshot path. PYNCCL was still
+listed behind it. `ep:0` never left PYNCCL.
+
+The first try, at util 0.98, built a 3,115,460-token KV pool and then
+died while b12x was preparing the MLA kernels, about 128 MiB short. I
+dropped util to 0.97 so it would finish. That boot's KV pool was
+2,101,050 tokens (1.94 GiB left for cache). Same bench order as
+September: context 0, then 16k, 32k, 128k, one request at a time, 30
+seconds, 2,048 max tokens.
 
 | | This rebench | September UVA (PYNCCL, util 0.98, KV 2.72M) |
 |---|---|---|
@@ -73,8 +78,9 @@ b12x MLA preparation (about 128 MiB short). The measured boot is util
 | Decode C=1 (0 / 16k / 32k / 128k) | 76.3 / 75.9 / 74.6 / 74.5 | 75.8 / 75.4 / 74.8 / 73.8 |
 | Prefill (16k / 32k / 128k) | 4,650 / 5,274 / 4,629 | 4,508 / 4,425 / 4,319 |
 
-Decode stayed in the September band. World-size-3 oneshot was not the
-decode limit on this box. I did not turn DSpark on. Full table:
+Decode is the same ~75 tok/s as September. The oneshot path was not what
+was holding this box back. I left DSpark off. Pete already measured that regression under this
+offload. Longer table:
 [candidates/uva/benchmarks/COMPARE.md](candidates/uva/benchmarks/COMPARE.md).
 
 ## Test setup

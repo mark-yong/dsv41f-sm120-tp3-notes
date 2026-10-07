@@ -107,15 +107,20 @@ InstantTensor `URING` / `BUFFERED` abort on this unprivileged container
 
 No standalone 256k / 512k / 1M prefill on this engine.
 
-## 2026-10-08 #410 rebench
+## Rebench, 2026-10-08
 
-Same recipe on
-`ghcr.io/local-inference-lab/vllm@sha256:edc0998c63df59eada70438b998dec60858a04d95c95541257c094e547ae591c`,
-DSpark off, ordinals 20–23, 8.13 GiB. `tp:0` came up as B12X PCIe oneshot
-(`['B12X_PCIE', 'PYNCCL']`). `ep:0` stayed PYNCCL. util 0.98 OOMed in
-b12x MLA preparation after placing 3,115,460 KV tokens. The measured boot
-is util 0.97, KV pool 2,101,050 tokens. Ordered bench 0 → 16k → 32k →
-128k, C=1, 30 s, 2,048 max tokens.
+Once an image with b12x#410 was available, I ran the same UVA recipe
+again:
+`ghcr.io/local-inference-lab/vllm@sha256:edc0998c63df59eada70438b998dec60858a04d95c95541257c094e547ae591c`.
+DSpark still off, same 8.13 GiB from ordinal 20. `tp:0` used the B12X
+PCIe oneshot path, with PYNCCL listed behind it (`['B12X_PCIE', 'PYNCCL']`).
+`ep:0` stayed on PYNCCL.
+
+util 0.98 filled 3,115,460 KV tokens and then ran out of memory while
+b12x was preparing the MLA kernels, by about 128 MiB. The numbers below
+are util 0.97, KV pool 2,101,050 tokens. Same order as the first good
+matrix: 0, then 16k, 32k, 128k. One request, 30 seconds, 2,048 max
+tokens.
 
 | Context | Decode | Prefill (client) | September decode | September prefill |
 |---------|--------|------------------|------------------|-------------------|
@@ -124,8 +129,8 @@ is util 0.97, KV pool 2,101,050 tokens. Ordered bench 0 → 16k → 32k →
 | 32k | 74.6 | 5274 | 74.8 | 4425 |
 | 128k | 74.5 | 4629 | 73.8 | 4319 |
 
-Decode did not move. The world-size-3 oneshot was not the decode limit
-on this box. DSpark was not enabled.
+Decode is flat with September. Turning world size 3 on did not buy
+tokens per second on this box. I left DSpark off.
 
 ## Credits
 
