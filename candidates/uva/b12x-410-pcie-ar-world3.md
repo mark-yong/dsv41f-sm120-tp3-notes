@@ -5,12 +5,14 @@ Upstream issue: [local-inference-lab/b12x#410](https://github.com/local-inferenc
 [b12x#297](https://github.com/local-inference-lab/b12x/pull/297) (world
 size 3 for the one-shot/DMA all-reduce, not merged).
 
-This is what the September r38 image did on the official-checkpoint UVA
-candidate. That image's MoE path uses B12X, and B12X's PCIe all-reduce
-refused world size 3. The EXL3 candidate never hit this (Tempo's
-all-reduce handles world 3 with the P2P override; it does not use B12X).
-I re-ran UVA on 2026-10-08 on an image that does accept world size 3.
-That result is at the bottom. Decode came out the same.
+The September UVA run hit this. It was on the r38 image, the MoE path
+goes through B12X, and the PCIe all-reduce would not take three GPUs.
+EXL3 never saw it. Tempo's all-reduce already handles three GPUs, and
+it doesn't use B12X.
+
+I ran the same UVA setup again on 2026-10-08, on a newer image where
+three GPUs are allowed. Decode was still about 75 tok/s. The run is at
+the bottom of this file.
 
 ## What happens
 
