@@ -1,4 +1,4 @@
-# DeepSeek-V4.1-Flash at TP3 on 3x RTX PRO 6000 (SM120): two candidates, one box
+# DeepSeek-V4.1-Flash at TP3 on 3x RTX PRO 6000 (SM120)
 
 I wanted to see which TP3 route made more sense on my 3x RTX PRO 6000 box:
 the 3.51 bpw EXL3 checkpoint, or the official DeepSeek checkpoint with
