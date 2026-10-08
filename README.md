@@ -111,6 +111,36 @@ landed around 60. Another gigabyte of experts in RAM made it a little
 slower, about 56, which is the same band as Pete's K7 note. The
 DSpark-off rebench is still the faster decode.
 
+## EXL3 follow-up (2026-10-08)
+
+Same P4 config as September, then with DSpark removed. On EXL3 the
+draft is in VRAM with the experts, so this is a different question from
+the UVA offload above.
+
+| | P4, DSpark on | P4, DSpark off |
+|---|---|---|
+| Prefill (8k / 16k) | 6,140 / 5,933 | 6,514 / 6,568 |
+| Decode C=1 (0 / 16k) | 55.5 / 56.0 | 45.4 / 44.1 |
+
+The draft is worth about 10 tok/s of decode here. Prefill is a bit
+faster without it. Accept length on the DSpark-on run was 2.3–2.4
+tokens per step.
+
+The 131k window (7 GiB KV, seqs 2, batched 2048) booted with DSpark
+off and prefilled at 5,888 tok/s (32k) and 5,852 (64k). The harness
+did not run 128k: that prompt is 131,071 tokens, and the filter keeps
+only contexts at or under the model length minus 64. Two boots that
+left DSpark on, one with a smaller CUDA graph and one with a 32k-only
+prefill, reached READY and died on the first prefill request. I did
+not build a 3.25 bpw quant. Tempo's current recipe still serves this
+3.51 bpw checkpoint, and the 131k failure with DSpark on is activation
+memory, not weight size.
+
+UVA with DSpark off is still the decode and long-context serve. EXL3
+P4 with DSpark on is still the short-prefill serve. The open cell is
+decode at 32k and 64k, plus a 96k prefill, on the 131k window with
+DSpark off.
+
 ## Test setup
 
 - Hardware: 3x RTX PRO 6000 96 GB (SM120) on PCIe 4.0 x16, NODE topology;
@@ -129,17 +159,14 @@ DSpark-off rebench is still the faster decode.
 
 ## What I'd test next
 
-1. A DSpark-off run at EXL3 P4, to isolate how much the speculation is
-   actually buying (accept length was 2.3-2.4 tokens/step; I never ran the
-   A/B).
-2. Things I'd try to get EXL3 131k working, one change at a time:
-   speculative decoding off, smaller CUDA graphs, a shorter prefill
-   matrix. The last attempt missed by tens of MiB, so any one might clear
-   it.
-3. A ~3.25 bpw EXL3 build to free VRAM for a larger KV pool. I skipped it
-   so far (I tested the existing 3.51 bpw checkpoint as-is); it is the
-   first thing I'd try if EXL3 long context is the goal.
-4. Standalone UVA 256k/512k/1M prefill cells (so far decode-only).
+1. On the EXL3 131k window with DSpark off: decode at 32k and 64k, and
+   a prefill around 96k. That prompt fits under the 131,072-token
+   window. If prefill stays near the 5.8k measured at 64k, EXL3 has a
+   long-prefill number to set next to UVA. If decode falls apart, keep
+   the 32k P4 config and leave DSpark on.
+2. Standalone UVA prefill at 64k and above, only if that EXL3 number is
+   close enough to compare. The 256k/512k/1M UVA cells so far are
+   decode-only.
 
 ## Credits
 

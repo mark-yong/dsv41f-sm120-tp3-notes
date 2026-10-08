@@ -79,9 +79,8 @@ users sharing the system.
 
 - Per-request decode is about 50-56 tok/s.
 - DSpark accept length measured 2.3-2.4 tokens per step (MTP-normalized
-  engine steps about 23 per second at concurrency 1). I did not run a
-  DSpark-off A/B, so the net wall-clock speedup from speculation is
-  unmeasured.
+  engine steps about 23 per second at concurrency 1). The DSpark-off
+  A/B is in the 2026-10-08 follow-up below.
 - The 32k decode cells error in the bench matrix when prompt plus 2048
   output tokens crosses the 32768 `max_model_len`; the server itself stayed
   up.
@@ -108,8 +107,40 @@ than re-running it for the context climb.
 
 The idle pool fits, but activation memory, CUDA graphs, speculative
 decoding, and long-prefill workspace together exceed the remaining margin
-under load. The last attempt missed by tens of MiB, so any single change
-under "What I'd test next" might clear it. P7 (~300k) I did not attempt.
+under load. The last attempt missed by tens of MiB. P7 (~300k) I did not
+attempt.
+
+### Follow-up, 2026-10-08
+
+Same image, `dsv41-tempo-sm120-tp3:path-a-prime`. Weights were already on
+the NVMe (`/mnt/nvme0`); the SAS path is only the September warm archive.
+
+P4 with DSpark removed, everything else unchanged (32k, 4 GiB KV, Engram
+in pinned DDR, custom all-reduce, P2P on):
+
+| | DSpark on | DSpark off |
+|---|---|---|
+| Prefill (8k / 16k) | 6,140 / 5,933 | 6,514 / 6,568 |
+| Decode C=1 (0 / 16k) | 55.5 / 56.0 | 45.4 / 44.1 |
+
+Speculation is buying about 10 tok/s of decode. Prefill is a bit faster
+without the draft.
+
+131k / 7 GiB, one change at a time:
+
+| Change | Boot | Bench |
+|---|---|---|
+| DSpark off | READY, KV budget 1,776,710 tokens | Prefill 5,888 at 32k, 5,852 at 64k. 128k was not run: the prompt is 131,071 tokens and the harness keeps contexts at or under model length minus 64. |
+| Smaller CUDA graphs (`max_cudagraph_capture_size` 8), DSpark still on | READY | First prefill request returned an engine 500, about six seconds in. No tok/s. |
+| Original P6 server, prefill limited to 32k | READY | Same 500 on the first prefill request. No tok/s. |
+
+I did not build a ~3.25 bpw quant. Jake Tempo's public recipe through
+v2.0.3 (2026-09-27) still serves this 3.51 bpw checkpoint and says it
+does not change quantization. The DSpark-on 131k failure is the prefill
+activation spike, not the weight size.
+
+Decode at 32k and 64k on the DSpark-off 131k window, and a prefill near
+96k, are the cells still open.
 
 ## What I learned
 
@@ -118,14 +149,17 @@ under "What I'd test next" might clear it. P7 (~300k) I did not attempt.
 2. The prefill levers that measured were custom all-reduce plus P2P (2.2k
    to 4.1k at 8k) and then Engram in pinned DDR (4.1k to 6.1k). Batch size
    and seq limits moved little.
-3. EXL3's best result here is ~6.1k prefill at 8k and ~55 tok/s per-user
-   decode, at 32k max context. The UVA route wins decode (~75 vs ~55 C=1)
-   and is the only one of the two I got serving 128k/1M. Pete's Gen5
-   prefill (7,424 at 32k) does not transfer 1:1 onto this Gen4 NODE box.
+3. EXL3's best short-context result is still the P4 config with DSpark
+   on: ~6.1k prefill at 8k and ~55 tok/s per-user decode. Turning DSpark
+   off on 2026-10-08 raised prefill to ~6.5k and dropped decode to ~45.
+   The UVA route wins decode (~75 vs ~55 C=1) and is the one I got
+   serving 128k/1M. Pete's Gen5 prefill (7,424 at 32k) does not transfer
+   1:1 onto this Gen4 NODE box.
 4. For long context on this box, official weights with decoder-half UVA
    expert offload (experts parked from the CED boundary at layer 20) is
-   the working path; EXL3 131k OOMs under bench. Same-box UVA decode held
-   67-72 tok/s out to 1M.
+   the working path. EXL3 at 131k with DSpark off did prefill 32k and
+   64k at ~5.85k. The same window with DSpark on still dies on the first
+   prefill request. Same-box UVA decode held 67-72 tok/s out to 1M.
 5. Engram holds native table weights rather than EXL3 experts; reuse
    across serve images only works for the same Flash revision, and
    different HF cuts need a config match check.
