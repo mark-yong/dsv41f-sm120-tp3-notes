@@ -79,9 +79,37 @@ seconds, 2,048 max tokens.
 | Prefill (16k / 32k / 128k) | 4,650 / 5,274 / 4,629 | 4,508 / 4,425 / 4,319 |
 
 Decode is the same ~75 tok/s as September. The oneshot path was not what
-was holding this box back. I left DSpark off. Pete already measured that regression under this
-offload. Longer table:
+was holding this box back. I left DSpark off for this run. A two-token
+try is the next section. Longer table:
 [candidates/uva/benchmarks/COMPARE.md](candidates/uva/benchmarks/COMPARE.md).
+
+## Two-token DSpark (2026-10-08)
+
+Same image and checkpoint as the rebench. I turned DSpark on at 2
+speculative tokens. Pete's K7 measurement on this kind of offload was
+42–58 tok/s, so the shorter window was the thing I wanted to check.
+
+The 8.13 GiB offload did not leave room for the drafter. At util 0.96
+the KV line was −2.0 GiB after the draft model loaded. util 0.99 never
+started: each GPU had 93.16 GiB free, and 0.99 asks for 94.11.
+
+I raised the offload and kept util at 0.97. `--cpu-offload-gb 10`
+parked 10.37 GiB and left 1.2 GiB of KV (1,290,975 tokens).
+`--cpu-offload-gb 11` parked 11.16 GiB and left 2.02 GiB (2,147,680
+tokens). Bench was context 0, then 16k, then 32k.
+
+| | 10.37 GiB off | 11.16 GiB off | Rebench, DSpark off |
+|---|---|---|---|
+| Decode C=1 (0 / 16k / 32k) | 60.2 / 61.5 / 60.0 | 56.0 / 57.5 / 56.3 | 76.3 / 75.9 / 74.6 |
+| Accept length | 2.01 / 2.00 / 2.02 | 1.99 / 2.01 / 1.97 | — |
+| Steps/s | 29.9 / 30.7 / 29.8 | 28.2 / 28.6 / 28.6 | — |
+| Prefill (16k / 32k) | 5,146 / 4,310 | 4,603 / 5,137 | 4,650 / 5,274 |
+
+The draft was taken. Accept length sat on 2. The step rate was about
+30 per second, against the single-token run at about 75, so decode
+landed around 60. Another gigabyte of experts in RAM made it a little
+slower, about 56, which is the same band as Pete's K7 note. The
+DSpark-off rebench is still the faster decode.
 
 ## Test setup
 

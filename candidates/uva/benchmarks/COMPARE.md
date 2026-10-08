@@ -130,7 +130,32 @@ tokens.
 | 128k | 74.5 | 4629 | 73.8 | 4319 |
 
 Decode is flat with September. Turning world size 3 on did not buy
-tokens per second on this box. I left DSpark off.
+tokens per second on this box. I left DSpark off for this run.
+
+## Two-token DSpark, 2026-10-08
+
+Same image, DSpark on at 2 speculative tokens, util 0.97. The 8.13 GiB
+offload did not boot: util 0.96 reported `Available KV cache memory:
+-2.0 GiB` after the drafter loaded, and util 0.99 was refused because
+free memory was 93.16 GiB. The two rows below raise the offload.
+
+`--cpu-offload-gb 10` accounted 10.37 GiB and left 1.2 GiB of KV
+(1,290,975 tokens). `--cpu-offload-gb 11` accounted 11.16 GiB and left
+2.02 GiB (2,147,680 tokens). Context 0, then 16k, then 32k. No 128k
+cell.
+
+| Context | Decode, 10.37 GiB | Decode, 11.16 GiB | Accept len, 10.37 / 11.16 | Steps/s, 10.37 / 11.16 | Prefill, 10.37 / 11.16 |
+|---------|-------------------|-------------------|---------------------------|------------------------|------------------------|
+| 0 | 60.2 | 56.0 | 2.01 / 1.99 | 29.9 / 28.2 | — |
+| 16k | 61.5 | 57.5 | 2.00 / 2.01 | 30.7 / 28.6 | 5146 / 4603 |
+| 32k | 60.0 | 56.3 | 2.02 / 1.97 | 29.8 / 28.6 | 4310 / 5137 |
+
+Accept length sat on 2, so the draft was being kept. The step rate was
+about 30/s. The single-token rebench above is about 75 tok/s, one step
+per token, so the net rate here is lower even with the draft landing.
+The 11.16 GiB row is slower than 10.37, and it sits in the 42–58 band
+Pete reported for K7 on the 8 GiB offload. I would keep DSpark off for
+decode on this box.
 
 ## Credits
 
