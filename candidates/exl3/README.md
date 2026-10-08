@@ -139,8 +139,20 @@ v2.0.3 (2026-09-27) still serves this 3.51 bpw checkpoint and says it
 does not change quantization. The DSpark-on 131k failure is the prefill
 activation spike, not the weight size.
 
-Decode at 32k and 64k on the DSpark-off 131k window, and a prefill near
-96k, are the cells still open.
+Same 131k boot, measured again on 2026-10-09 with decode included.
+KV budget was 1,776,710 tokens. `speculative_config` was unset.
+
+| | 32k | 64k | 96k |
+|---|---|---|---|
+| Prefill, client tok/s | 6,276 | 6,001 | 5,585 |
+| Decode C=1, aggregate tok/s | 42.6 | 40.2 | — |
+
+96k is under the harness cap (model length minus 64). Both decode
+cells completed with no errors. Accept length was 0 because DSpark was
+off. 40 tok/s is the no-draft slope from ~45 at short context, not a
+collapse, and it is still below P4 with DSpark on (~55). I would keep
+P4 with DSpark on as the EXL3 serve. This 131k boot is the long-prefill
+result: 5,585 tok/s at 96k, next to UVA's roughly 4.5k–5.3k at 16k–32k.
 
 ## What I learned
 
@@ -157,9 +169,10 @@ Decode at 32k and 64k on the DSpark-off 131k window, and a prefill near
    1:1 onto this Gen4 NODE box.
 4. For long context on this box, official weights with decoder-half UVA
    expert offload (experts parked from the CED boundary at layer 20) is
-   the working path. EXL3 at 131k with DSpark off did prefill 32k and
-   64k at ~5.85k. The same window with DSpark on still dies on the first
-   prefill request. Same-box UVA decode held 67-72 tok/s out to 1M.
+   the working decode path. EXL3 at 131k with DSpark off prefilled 32k,
+   64k, and 96k at 6,276 / 6,001 / 5,585, and decoded at 42.6 / 40.2.
+   The same window with DSpark on still dies on the first prefill
+   request. Same-box UVA decode held 67-72 tok/s out to 1M.
 5. Engram holds native table weights rather than EXL3 experts; reuse
    across serve images only works for the same Flash revision, and
    different HF cuts need a config match check.

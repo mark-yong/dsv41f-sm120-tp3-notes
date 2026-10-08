@@ -136,10 +136,17 @@ not build a 3.25 bpw quant. Tempo's current recipe still serves this
 3.51 bpw checkpoint, and the 131k failure with DSpark on is activation
 memory, not weight size.
 
-UVA with DSpark off is still the decode and long-context serve. EXL3
-P4 with DSpark on is still the short-prefill serve. The open cell is
-decode at 32k and 64k, plus a 96k prefill, on the 131k window with
-DSpark off.
+I then ran that same 131k boot again and measured decode as well.
+Prefill was 6,276 / 6,001 / 5,585 tok/s at 32k / 64k / 96k. Decode at
+concurrency 1 was 42.6 tok/s at 32k and 40.2 at 64k, with no errors.
+That is the no-draft rate, a little under the 45 measured at short
+context with DSpark off, and well under the 55 from P4 with DSpark on.
+
+The 96k prefill stayed near the 5.8k from the first 64k cell, so EXL3
+has a long-prefill number to set next to UVA (about 4.5k–5.3k at
+16k–32k). Decode did not fall apart. The EXL3 setup I would keep for
+serving is still the 32k P4 config with DSpark on. The 131k window
+with DSpark off is the long-prefill configuration.
 
 ## Test setup
 
@@ -159,14 +166,9 @@ DSpark off.
 
 ## What I'd test next
 
-1. On the EXL3 131k window with DSpark off: decode at 32k and 64k, and
-   a prefill around 96k. That prompt fits under the 131,072-token
-   window. If prefill stays near the 5.8k measured at 64k, EXL3 has a
-   long-prefill number to set next to UVA. If decode falls apart, keep
-   the 32k P4 config and leave DSpark on.
-2. Standalone UVA prefill at 64k and above, only if that EXL3 number is
-   close enough to compare. The 256k/512k/1M UVA cells so far are
-   decode-only.
+Standalone UVA prefill at 64k and above. EXL3's 96k cell landed at
+5,585 tok/s, which is close enough to compare. The 256k/512k/1M UVA
+cells so far are decode-only.
 
 ## Credits
 
