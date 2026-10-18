@@ -53,6 +53,14 @@ The compose is the gist original with four mechanical changes: model path
 parameterised, overlay path pointed into this repo, host port 8015, project
 renamed. Everything else, including the image digest, is verbatim.
 
+The `1017` revision (`deepseek-ai/DeepSeek-V4.1-Flash-1017@1bae0e10`)
+drops into the same compose. `MODEL_HOST_PATH` is the only change:
+`config.json`, the tokenizer files, and the tensor index are
+byte-identical to `fb2764a5`. All 48 weight shards are new, Engram
+included. I have switched the path but not yet benchmarked 1017 on this
+route; every number below is `fb2764a5`. Notes:
+[../exl3-1017/README.md](../exl3-1017/README.md#checkpoints).
+
 ## Measured (this box, PCIe 4.0 x16 NODE)
 
 Same-box comparison vs the EXL3 candidate, 2026-09-22, exclusive GPU

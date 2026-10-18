@@ -17,6 +17,9 @@ measurements, and failed attempts behind that result.
   decoder half.
 - **Head-to-head** ([candidates/uva/benchmarks/COMPARE.md](candidates/uva/benchmarks/COMPARE.md)):
   same-box comparison of both final configs plus Pete's Gen5 numbers.
+- **1017 revision, in progress** ([candidates/exl3-1017/README.md](candidates/exl3-1017/README.md)):
+  porting a 2.9 bpw EXL3 quant of DeepSeek-V4.1-Flash-1017 to the same
+  TP3 runtime. Kernel-level checks so far, no serving numbers yet.
 
 ## Result
 
@@ -53,6 +56,18 @@ box. Writeup:
 [b12x-410-pcie-ar-world3.md](candidates/uva/b12x-410-pcie-ar-world3.md).
 I re-ran the same UVA recipe once a newer image actually accepted world
 size 3. Decode did not budge.
+
+## Correction: EXL3 router bias (2026-10-18)
+
+The EXL3 image behind every EXL3 number in this repo never loads the MoE
+router's correction bias. The cuda-exl3 MoE method takes over the
+loader of every parameter on the expert layer, the router bias included,
+and then declines the bias quietly. Experts were selected without it.
+The throughput numbers are what the engine did; output quality was never
+measured, and with this bug it cannot be assumed. The UVA route does not
+use cuda-exl3 and is not affected. Walkthrough and fix
+(NNNtrance/cuda-exl3 `004e9f8d`):
+[candidates/exl3/README.md](candidates/exl3/README.md#router-bias-not-loaded-found-2026-10-18).
 
 ## Rebench after #410 (2026-10-08)
 
@@ -162,13 +177,18 @@ with DSpark off is the long-prefill configuration.
   prefill or a retrieval test. Standalone 256k/512k/1M prefill was not
   collected on this engine.
 - Output quality (EXL3 vs official weights) is not tested yet; what I ran
-  was smoke tests and the bench tables.
+  was smoke tests and the bench tables. The EXL3 runs also had the
+  router-bias bug above.
 
 ## What I'd test next
 
 Standalone UVA prefill at 64k and above. EXL3's 96k cell landed at
 5,585 tok/s, which is close enough to compare. The 256k/512k/1M UVA
 cells so far are decode-only.
+
+EXL3 P4 again on an image with the router-bias fix, plus a top-k expert
+agreement check against the official checkpoint, so the EXL3 numbers
+have a quality reading next to them.
 
 ## Credits
 
@@ -200,6 +220,13 @@ this repo is mostly assembled from their work.
 - **[DeepSeek](https://github.com/deepseek-ai)**:
   [DeepSeek-V4.1-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash),
   DSpark, CED, and Engram.
+- **[NNNtrance](https://github.com/NNNtrance/cuda-exl3)**: the cuda-exl3
+  fork with the router-bias and fused-combine split-k fixes.
+- **LibertAIDAI**: the
+  [DeepSeek-V4.1-Flash-1017 EXL3 2.9 bpw](https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw)
+  quant the 1017 notes use.
+- **anoane**: DeepSeek-V4.1 support for exllamav3
+  ([turboderp-org/exllamav3#449](https://github.com/turboderp-org/exllamav3/pull/449)).
 - **vLLM**, **FlashInfer**, **TileLang**, **NVIDIA CUDA / SM120**.
 
 ## Licence and notices

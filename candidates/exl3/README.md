@@ -11,6 +11,11 @@ comparison against the official-checkpoint UVA route is in
 I tested the existing 3.51 bpw checkpoint as-is and did not build a
 ~3.25 bpw variant.
 
+**Correction, 2026-10-18:** every EXL3 run in this file used an image
+that never loads the MoE router's correction bias. Throughput numbers
+stand as measured, but routing was not the model's. Details and the fix
+are in [Router bias not loaded](#router-bias-not-loaded-found-2026-10-18).
+
 ## Stack
 
 | Piece | Choice |
@@ -153,6 +158,62 @@ off. 40 tok/s is the no-draft slope from ~45 at short context, not a
 collapse, and it is still below P4 with DSpark on (~55). I would keep
 P4 with DSpark on as the EXL3 serve. This 131k boot is the long-prefill
 result: 5,585 tok/s at 96k, next to UVA's roughly 4.5k–5.3k at 16k–32k.
+
+## Router bias not loaded (found 2026-10-18)
+
+While preparing the DeepSeek-V4.1-Flash-1017 port I read the cuda-exl3
+MoE loader against
+[NNNtrance/cuda-exl3](https://github.com/NNNtrance/cuda-exl3), a fork
+with two fixes newer than upstream `Zeuss5/cuda-exl3@6a1ffc34`. One of
+them applies to the image every EXL3 number here came from.
+
+How it happens, in the GHCR image `sha256:ddd31bc7…` and the
+`path-a-prime` follow-up image alike (I checked the installed files in
+both):
+
+1. The DeepSeek-V4.1 model creates `gate.e_score_correction_bias` as an
+   uninitialised `torch.empty` Parameter and passes it to the fused MoE
+   layer.
+2. vLLM's `RoutedExperts.__init__` assigns it to the layer
+   (`fused_moe/routed_experts.py:117`), which registers the same
+   Parameter on the expert layer, and only then calls the quant method's
+   `create_weights`.
+3. The EXL3 `create_weights` (`cuda_exl3/moe.py:247`) walks
+   `layer.named_parameters(recurse=False)` and sets its own expert loader
+   on every one of them, the router bias included.
+4. The checkpoint's `.ffn.gate.bias` arrives without MoE keyword
+   arguments, and the expert loader declines anything without them. It
+   does so quietly, and vLLM does not report unloaded parameters for
+   quantized models.
+
+So on every non-hash MoE layer, experts were picked without the
+correction bias, against whatever the allocator left in that memory. The
+fork's author measured this on GLM-5.3 with the same loader: top-8
+expert agreement 0/96 before the fix, and KL 0.103 → 0.0084 after it. I
+have not measured the effect on DeepSeek-V4.1 yet.
+
+What changes and what does not:
+
+- The prefill and decode tables above are still what the engine did.
+  Expert choice moves work between experts, not the amount of it, so I
+  do not expect the fix to move throughput much, but I have not re-run
+  it.
+- The smoke tests passed with the bug present, which says little about
+  output quality. Nothing in this file measured quality to begin with.
+- The fix is NNNtrance `004e9f8d` (branch `fix/moe-create-weights-scope`):
+  set the expert loader only on the method's own parameters
+  (`w13_*`/`w2_*` trellis, `suh`, `svh`, codebook), and fall back to
+  vLLM's default loader for a plain tensor without MoE keyword
+  arguments. I also log a warning at load time if the bias is still zero
+  or non-finite, so a regression shows up in the boot log.
+- I took the fork's other fix as well, `69ffef3c` ("never split-k a fused
+  MoE combine", `gemm.cu`). It only triggers when the expert grid is too
+  small to fill the GPU; decode at top-6 launches 240 blocks against 188
+  SMs, so I doubt the September runs hit it.
+
+I rebuilt the image with both fixes on 2026-10-18 (the published GHCR
+image is unchanged). Re-running P4 on it, with a top-k agreement check
+against the official checkpoint, is the next EXL3 measurement.
 
 ## What I learned
 
@@ -304,7 +365,9 @@ Discord, support still none committed):
   but UVA prefill on this Gen4 box does not beat P4 8k/16k (see
   [../uva/benchmarks/COMPARE.md](../uva/benchmarks/COMPARE.md)); DSpark net
   speedup not isolated; 8 GiB KV not usable (see Failed attempts); output
-  quality not tested against the official checkpoint
+  quality not tested against the official checkpoint; the router's
+  correction bias is never loaded (see Router bias not loaded; fixed in
+  NNNtrance/cuda-exl3 `004e9f8d`, not in this image)
 - Support: none committed. Issues on this repository are accepted but may
   go unanswered; see What I learned for where this route landed on my
   hardware.
