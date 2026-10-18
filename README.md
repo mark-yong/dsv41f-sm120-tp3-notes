@@ -65,8 +65,8 @@ loader of every parameter on the expert layer, the router bias included,
 and then declines the bias quietly. Experts were selected without it.
 The throughput numbers are what the engine did; output quality was never
 measured, and with this bug it cannot be assumed. The UVA route does not
-use cuda-exl3 and is not affected. Walkthrough and fix
-(NNNtrance/cuda-exl3 `004e9f8d`):
+use cuda-exl3 and is not affected. The fix is open upstream as
+[Zeuss5/cuda-exl3#8](https://github.com/Zeuss5/cuda-exl3/pull/8). Walkthrough:
 [candidates/exl3/README.md](candidates/exl3/README.md#router-bias-not-loaded-found-2026-10-18).
 
 ## Rebench after #410 (2026-10-08)
@@ -221,7 +221,9 @@ this repo is mostly assembled from their work.
   [DeepSeek-V4.1-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash),
   DSpark, CED, and Engram.
 - **[NNNtrance](https://github.com/NNNtrance/cuda-exl3)**: the cuda-exl3
-  fork with the router-bias and fused-combine split-k fixes.
+  router-bias and fused-combine split-k fixes
+  ([#8](https://github.com/Zeuss5/cuda-exl3/pull/8),
+  [#7](https://github.com/Zeuss5/cuda-exl3/pull/7)).
 - **LibertAIDAI**: the
   [DeepSeek-V4.1-Flash-1017 EXL3 2.9 bpw](https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw)
   quant the 1017 notes use.

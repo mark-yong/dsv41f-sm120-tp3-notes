@@ -5,7 +5,9 @@ whether a smaller EXL3 quant of it fixes what held the 3.51 bpw Pollard
 route back on this box: no room for long context with DSpark on. The quant is
 [LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw](https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw)
 at revision `c178a012`. The runtime is the same Jake Tempo cuda-exl3 TP3
-image as [../exl3/README.md](../exl3/README.md), with the router-bias fix.
+image as [../exl3/README.md](../exl3/README.md), with the router-bias fix
+([Zeuss5/cuda-exl3#8](https://github.com/Zeuss5/cuda-exl3/pull/8)) and
+the split-k fix ([#7](https://github.com/Zeuss5/cuda-exl3/pull/7)).
 
 Nothing here serves yet. So far I have checked that the checkpoint's
 tensors can run on that runtime at TP3, and I have written the conversion

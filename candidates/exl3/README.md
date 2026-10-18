@@ -200,14 +200,16 @@ What changes and what does not:
   it.
 - The smoke tests passed with the bug present, which says little about
   output quality. Nothing in this file measured quality to begin with.
-- The fix is NNNtrance `004e9f8d` (branch `fix/moe-create-weights-scope`):
-  set the expert loader only on the method's own parameters
+- The fix is NNNtrance `004e9f8d`, open upstream as
+  [Zeuss5/cuda-exl3#8](https://github.com/Zeuss5/cuda-exl3/pull/8)
+  (not merged as of 2026-10-18): set the expert loader only on the method's own parameters
   (`w13_*`/`w2_*` trellis, `suh`, `svh`, codebook), and fall back to
   vLLM's default loader for a plain tensor without MoE keyword
   arguments. I also log a warning at load time if the bias is still zero
   or non-finite, so a regression shows up in the boot log.
 - I took the fork's other fix as well, `69ffef3c` ("never split-k a fused
-  MoE combine", `gemm.cu`). It only triggers when the expert grid is too
+  MoE combine", `gemm.cu`), open upstream as
+  [Zeuss5/cuda-exl3#7](https://github.com/Zeuss5/cuda-exl3/pull/7). It only triggers when the expert grid is too
   small to fill the GPU; decode at top-6 launches 240 blocks against 188
   SMs, so I doubt the September runs hit it.
 
@@ -366,8 +368,9 @@ Discord, support still none committed):
   [../uva/benchmarks/COMPARE.md](../uva/benchmarks/COMPARE.md)); DSpark net
   speedup not isolated; 8 GiB KV not usable (see Failed attempts); output
   quality not tested against the official checkpoint; the router's
-  correction bias is never loaded (see Router bias not loaded; fixed in
-  NNNtrance/cuda-exl3 `004e9f8d`, not in this image)
+  correction bias is never loaded (see Router bias not loaded; fix in
+  [Zeuss5/cuda-exl3#8](https://github.com/Zeuss5/cuda-exl3/pull/8), not
+  in this image)
 - Support: none committed. Issues on this repository are accepted but may
   go unanswered; see What I learned for where this route landed on my
   hardware.
