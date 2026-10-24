@@ -83,9 +83,11 @@ on a Gen5 host. I ran his image and his benchmark scripts, with the
 compose changed only where this host needed it.
 
 The first run, with Engram layer 14 read from the checkpoint as upstream
-ships it, prefilled real source code at only 2.9–3.8k tok/s. Here the
-checkpoint sits behind a FUSE mergerfs union. This host has 500 GB of
-RAM, so I pinned both Engram tables (`ENGRAM_RAM_LAYERS=1,14`):
+ships it, prefilled real source code at only 2.9–3.8k tok/s. The
+checkpoint was on nvme0, which manages 14k random 4 KiB reads per second
+where nvme1 manages 747k, and layer 14 is read one 4 KiB block per row.
+This host has 500 GB of RAM, so I pinned both Engram tables
+(`ENGRAM_RAM_LAYERS=1,14`):
 
 | | Layer 14 from disk | Layers 1 and 14 in RAM | Upstream, Gen5 |
 |---|---|---|---|
@@ -239,9 +241,9 @@ EXL3 P4 again on an image with the router-bias fix, plus a top-k expert
 agreement check against the official checkpoint, so the EXL3 numbers
 have a quality reading next to them.
 
-For Kraken 1017: layer 14 read from a plain NVMe mount instead of RAM,
-to separate the FUSE cost from the disk cost. Also BoxTops4Coochie's
-quality suite on this box (lavd, hotel-lights, long retrieval, long
+For Kraken 1017: layer 14 read from nvme1's direct mount instead of RAM,
+to see whether a fast drive matches the RAM-pinned numbers. Also
+BoxTops4Coochie's quality suite on this box (lavd, hotel-lights, long retrieval, long
 generation).
 
 ## Credits

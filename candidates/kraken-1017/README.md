@@ -48,7 +48,7 @@ above.
 Upstream keeps Engram layer 1 pinned in RAM and reads layer 14 from the
 checkpoint with io_uring, with a 2 GiB-per-GPU row cache in front. His
 host has 256 GB, and both tables do not fit next to the parked experts.
-On this host the checkpoint sits behind a FUSE `mergerfs` union
+On this host the checkpoint was on nvme0, behind a FUSE `mergerfs` union
 (`nvme0:sas1:sas2:rpool`), and that read path was slow.
 
 The synthetic filler in `llm_decode_bench` repeats, so the row cache
@@ -67,10 +67,28 @@ about 3k:
 Decode moved as well. The quick-test decode went from about 50 to 59
 engine steps/s, so layer 14's row lookups were on the decode path too.
 
-I did not try layer 14 on disk from a plain NVMe mount (nvme1 is a direct
-xfs mount on this host). That run would show how much of the gap was
-FUSE and how much was disk. With the RAM to spare, pinning it is
-simpler. The stack now runs with `ENGRAM_RAM_LAYERS=1,14` in its `.env`.
+The reader turns every 256-byte row miss into one 4 KiB `O_DIRECT`
+io_uring read (queue depth 64 per reader), so what matters is random-read
+IOPS, not bandwidth. It turned out to be the drive. 4 KiB random reads
+with `fio` (io_uring, direct, 3 jobs, read-only):
+
+| Path | QD 1 per job | QD 64 per job |
+|---|---|---|
+| nvme0 raw device (generic "PCIe SSD", fw `ELFMC1.0`, Gen4 x4) | 6.1k IOPS, 0.48 ms | 14.2k IOPS, 13.5 ms |
+| nvme0 through `mergerfs`, shard 48 (layer 14's table) | | 40.8k IOPS, 4.5 ms |
+| nvme1 raw device (Crucial T710) | 94.5k IOPS, 0.03 ms | 747k IOPS, 0.25 ms |
+| nvme1 direct xfs mount, from the container | | 624k IOPS, 0.30 ms |
+
+The `mergerfs` row beats nvme0's raw device because `mergerfs` runs
+with `cache.files=partial`. The reader's `O_DIRECT` does not get through
+to the drive, so part of shard 48 was still in the hypervisor's page
+cache from the boot-time load. nvme0 has no SMART warnings, sits at
+46 °C, and was otherwise idle. It is just slow at small random reads.
+
+I have not served layer 14 from nvme1. With the RAM to spare, pinning it
+is simpler. The stack now runs with `ENGRAM_RAM_LAYERS=1,14` in its
+`.env`. If that RAM is needed elsewhere, the fallback is the checkpoint
+on nvme1, mounted directly rather than through `mergerfs`.
 
 ## Against upstream
 
