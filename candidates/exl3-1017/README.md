@@ -13,6 +13,12 @@ Nothing here serves yet. So far I have checked that the checkpoint's
 tensors can run on that runtime at TP3, and I have written the conversion
 for the parts that cannot. No throughput or quality numbers.
 
+The official 1017 weights now serve on this box through
+BoxTops4Coochie's Kraken recipe, at 1M context with DSpark on:
+[../kraken-1017/README.md](../kraken-1017/README.md). That sets the bar
+for this quant. On its 32k / 128k cells, Kraken decodes at 111 / 106 tok/s
+at one user.
+
 ## Checkpoints
 
 | | Revision | Shards | Size | Checked |

@@ -1,0 +1,118 @@
+{
+ "known": [
+  {
+   "ttft_s": 0.42,
+   "completion_tokens": 20,
+   "prompt_tokens": 43,
+   "decode_tok_s": 203.6,
+   "answer": "391",
+   "reasoning_chars": 56,
+   "pass": true,
+   "prompt": "What is 17*23? Reply with just the number."
+  },
+  {
+   "ttft_s": 0.422,
+   "completion_tokens": 21,
+   "prompt_tokens": 40,
+   "decode_tok_s": 115.4,
+   "answer": "Canberra",
+   "reasoning_chars": 79,
+   "pass": true,
+   "prompt": "What is the capital of Australia? One word."
+  },
+  {
+   "ttft_s": 0.403,
+   "completion_tokens": 16,
+   "prompt_tokens": 44,
+   "decode_tok_s": 139.1,
+   "answer": "Au",
+   "reasoning_chars": 54,
+   "pass": true,
+   "prompt": "What is the chemical symbol for gold? Reply with just the symbol."
+  },
+  {
+   "ttft_s": 0.422,
+   "completion_tokens": 51,
+   "prompt_tokens": 61,
+   "decode_tok_s": 210.5,
+   "answer": "17:15",
+   "reasoning_chars": 103,
+   "pass": true,
+   "prompt": "If a train leaves at 14:40 and the trip takes 2 hours 35 minutes, when does it arrive? Reply as HH:MM."
+  },
+  {
+   "ttft_s": 0.413,
+   "completion_tokens": 379,
+   "prompt_tokens": 45,
+   "decode_tok_s": 239.2,
+   "answer": "yrassecen",
+   "reasoning_chars": 901,
+   "pass": true,
+   "prompt": "Spell the word 'necessary' backwards. Reply with only the result."
+  }
+ ],
+ "decode": [
+  {
+   "ttft_s": 0.405,
+   "completion_tokens": 1291,
+   "prompt_tokens": 59,
+   "decode_tok_s": 170.1,
+   "reasoning_chars": 1927,
+   "steps_per_s": 59.47,
+   "tokens_per_step": 2.863
+  },
+  {
+   "ttft_s": 0.396,
+   "completion_tokens": 1500,
+   "prompt_tokens": 59,
+   "decode_tok_s": 174.0,
+   "reasoning_chars": 2944,
+   "steps_per_s": 58.85,
+   "tokens_per_step": 2.959
+  }
+ ],
+ "needle": {
+  "ttft_s": 3.065,
+  "completion_tokens": 49,
+  "prompt_tokens": 28553,
+  "decode_tok_s": 216.3,
+  "answer": "48213-ZETA",
+  "reasoning_chars": 161,
+  "pass": true
+ },
+ "concurrent": {
+  "requests": [
+   {
+    "ttft_s": 0.43,
+    "completion_tokens": 800,
+    "prompt_tokens": 59,
+    "decode_tok_s": 75.3,
+    "reasoning_chars": 1456
+   },
+   {
+    "ttft_s": 0.429,
+    "completion_tokens": 800,
+    "prompt_tokens": 59,
+    "decode_tok_s": 75.9,
+    "reasoning_chars": 779
+   },
+   {
+    "ttft_s": 0.429,
+    "completion_tokens": 800,
+    "prompt_tokens": 59,
+    "decode_tok_s": 76.5,
+    "reasoning_chars": 699
+   },
+   {
+    "ttft_s": 0.428,
+    "completion_tokens": 800,
+    "prompt_tokens": 59,
+    "decode_tok_s": 75.4,
+    "reasoning_chars": 1606
+   }
+  ],
+  "wall_s": 11.0,
+  "aggregate_tok_s": 289.7,
+  "errors": 0
+ }
+}

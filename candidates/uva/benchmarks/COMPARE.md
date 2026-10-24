@@ -157,6 +157,43 @@ The 11.16 GiB row is slower than 10.37, and it sits in the 42–58 band
 Pete reported for K7 on the 8 GiB offload. I would keep DSpark off for
 decode on this box.
 
+## Kraken 1017, 2026-10-25
+
+[BoxTops4Coochie](https://github.com/BoxTops4Coochie)'s Kraken recipe
+(`azallaza/ds41-kraken-tp3:20261019.3`, official 1017 `1bae0e10`, DSpark
+5 drafts, expert layers 20–25 parked and hot experts promoted), on this
+box with both Engram tables in RAM. Notes and raw output in
+[candidates/kraken-1017/](../../kraken-1017/README.md). Harness
+`llm_decode_bench` 0.7.8; the UVA columns above used 0.4.32. Cell
+settings are the same: one request, 30 seconds, 2,048 max tokens, no
+decode warm-up.
+
+| Context | Kraken decode | Kraken prefill | UVA rebench decode | UVA rebench prefill |
+|---------|---------------|----------------|--------------------|---------------------|
+| 0 | 111.8 | — | 76.3 | — |
+| 16k | 119.2 | 6160 | 75.9 | 4650 |
+| 32k | 111.1 | 8969 | 74.6 | 5274 |
+| 128k | 105.6 | 8140 | 74.5 | 4629 |
+
+Prefill on real source code, which this bench filler does not stand in
+for on Kraken (its Engram row cache hits the repeated filler), was
+8,574 / 7,697 / 8,665 tok/s at 105k / 259k / 102k tokens. A
+994,842-token needle passed at 6,747 tok/s. UVA has no real-code or
+standalone 1M prefill number to set against those.
+
+| | This box, Kraken | BoxTops4Coochie, Gen5 |
+|---|---|---|
+| Decode 32k, C1 / C4 | 113.9 / 200.1 | 186.7 / 340.7 |
+| Decode 128k, C1 / C4 | 118.8 / 193.2 | 179.2 / 307.1 |
+| Engine steps/s 32k, C1 / C4 | 45.7 / 81.2 | 67.5 / 139.9 |
+| `llm_decode_bench` prefill 32k / 128k | 8,347 / 6,851 | 13,486 / 12,245 |
+| Real-code prefill | 8,574 / 7,697 / 8,665 | 10,646 / 10,228 / 11,354 |
+| 983k needle | 6,747 tok/s | 7,193 tok/s |
+
+Like Pete's ladder above, the Gen5 host is ahead. On Kraken the gap is
+larger for decode than for real-text prefill, which fits the parked
+experts being read over PCIe every step.
+
 ## Credits
 
 This run is a homelab reproduction. The recipe, image, kernels, and weights
@@ -179,6 +216,11 @@ are not ours.
 - **[DeepSeek](https://github.com/deepseek-ai)** — 
   [DeepSeek-V4.1-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash)
   `fb2764a5`, CED, Engram.
+- **[BoxTops4Coochie](https://github.com/BoxTops4Coochie)** — the Kraken
+  1017 recipe, image, benchmark scripts and Gen5 numbers
+  ([RTX-PRO-6000-TP3-Inference-Recipes](https://github.com/BoxTops4Coochie/RTX-PRO-6000-TP3-Inference-Recipes)),
+  building on [infernix](https://github.com/infernix)'s `ds41f-tp3`
+  expert parking.
 - **vLLM**, **FlashInfer**, **TileLang**, **NVIDIA CUDA / SM120**.
 - **EXL3 quantized checkpoint:**
   [bot-lab-21 Pollard](https://huggingface.co/bot-lab-21/DeepSeek-V4.1-Flash-EXL3-3.5bpw-Pollard),
