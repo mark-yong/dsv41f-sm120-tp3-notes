@@ -1,4 +1,4 @@
-# Candidate B: official checkpoint + decoder-half UVA expert offload
+# Official checkpoint + decoder-half UVA expert offload
 
 The official DeepSeek `fb2764a5` checkpoint on the LIL r38 image, with
 vLLM's UVA CPU offloader re-targeted from its stock encoder-half walk to

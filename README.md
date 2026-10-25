@@ -1,74 +1,60 @@
 # DeepSeek-V4.1-Flash at TP3 on 3x RTX PRO 6000 (SM120)
 
-I wanted to see which TP3 route made more sense on my 3x RTX PRO 6000 box:
-the 3.51 bpw EXL3 checkpoint, or the official DeepSeek checkpoint with
-decoder-half UVA expert offload. I got both running and benchmarked them on
-the same machine.
+This repo holds the configs, compose files, bench output and failed
+attempts from serving DeepSeek-V4.1-Flash at TP3 on my 3x RTX PRO 6000
+(SM120) box. Three routes are up, and a fourth is in progress.
 
-The short version: EXL3 is faster at short-context prefill. UVA is much
-faster for single-user decode and is the only one of the two that I got
-working at 128k-1M context. The rest of the repo is the configs,
-measurements, and failed attempts behind that result.
+Kraken 1017 is the one I would serve. On this box decode at one user is
+106-119 tok/s, real-code prefill 7.7-8.7k tok/s, and a 994,842-token
+needle passes inside the 1M window. It serves the official 1017 weights
+with DSpark on. The change it needed here was RAM: with the Engram tables
+pinned, both of them, real-code prefill holds at 7.7-8.7k; with layer 14
+read from the checkpoint's disk path, as upstream ships it, the same
+prompts fell to 2.9-3.8k.
 
-Update, 2026-10-25: BoxTops4Coochie's Kraken recipe for the 1017
-revision beats both on this box. Decode at one user is 106–119 tok/s,
-prefill on real code 7.7–8.7k tok/s, and a 994,842-token needle passes.
-It serves the official weights with DSpark on. On this host it needed
-both Engram tables pinned in RAM. See
-[Kraken 1017](#kraken-1017-2026-10-25) below.
+## Routes
 
-- **Candidate A, EXL3 3.51 bpw** ([candidates/exl3/README.md](candidates/exl3/README.md)):
-  the Pollard checkpoint on Jake Tempo's cuda-exl3 TP3 port.
-- **Candidate B, official checkpoint + decoder-half UVA** ([candidates/uva/NOTES.md](candidates/uva/NOTES.md)):
-  recipe by peterkilfeather; the UVA expert offload re-targeted to the
-  decoder half.
-- **Head-to-head** ([candidates/uva/benchmarks/COMPARE.md](candidates/uva/benchmarks/COMPARE.md)):
-  same-box comparison of both final configs plus Pete's Gen5 numbers.
-- **1017 revision, in progress** ([candidates/exl3-1017/README.md](candidates/exl3-1017/README.md)):
-  porting a 2.9 bpw EXL3 quant of DeepSeek-V4.1-Flash-1017 to the same
-  TP3 runtime. Kernel-level checks so far, no serving numbers yet.
-- **Candidate C, Kraken 1017** ([candidates/kraken-1017/README.md](candidates/kraken-1017/README.md)):
+- Kraken 1017, [candidates/kraken-1017/README.md](candidates/kraken-1017/README.md):
   [BoxTops4Coochie](https://github.com/BoxTops4Coochie)'s recipe for the
   official 1017 checkpoint on the karmic-kraken image, run on this box
   and compared with his Gen5 numbers.
+- Official checkpoint + decoder-half UVA, [candidates/uva/NOTES.md](candidates/uva/NOTES.md):
+  recipe by peterkilfeather; the UVA expert offload re-targeted to the
+  decoder half.
+- EXL3 3.51 bpw, [candidates/exl3/README.md](candidates/exl3/README.md):
+  the Pollard checkpoint on Jake Tempo's cuda-exl3 TP3 port.
+- 1017 EXL3 2.9 bpw, in progress, [candidates/exl3-1017/README.md](candidates/exl3-1017/README.md):
+  porting a 2.9 bpw EXL3 quant of DeepSeek-V4.1-Flash-1017 to the same
+  TP3 runtime. Kernel-level checks so far, no serving numbers yet.
+- Head-to-head of the two older routes, [candidates/uva/benchmarks/COMPARE.md](candidates/uva/benchmarks/COMPARE.md):
+  same-box comparison of both final configs plus Pete's Gen5 numbers.
 
 ## Result
 
-| | EXL3 3.51 bpw (P4) | official checkpoint + UVA | Kraken 1017 (BoxTops4Coochie), Engram in RAM |
+| | Kraken 1017 (BoxTops4Coochie), Engram in RAM | official checkpoint + UVA | EXL3 3.51 bpw (P4) |
 |---|---|---|---|
-| Serve | `candidates/exl3/reproduce/compose/` | `candidates/uva/compose/` | his compose at `bcf72fe` plus the deltas in `candidates/kraken-1017/` |
-| Port | 8014 | 8015 | 8019 |
-| Checkpoint | Pollard 3.51 bpw, 48 shards,<br>428.5 GiB, sha-pinned | official `fb2764a5` | official 1017 `1bae0e10` |
-| Image | GHCR `dsv41f-tempo-sm120-tp3@sha256:ddd31bc7…` (build recipe in repo) | LIL r38 `localinferencelab/vllm@sha256:f41ca8bb…` | `azallaza/ds41-kraken-tp3:20261019.3` (`sha256:c4c2de52…`) |
-| Max context | 32k (131k boots, OOMs under bench) | 1M window (1M decode cell passed at 1,034,830-token context) | 1M window (994,842-token needle passed) |
-| KV pool | 4 GiB fp8 at 32k;<br>a 7 GiB (reported as 3,479,680 tokens)<br>attempt booted but OOMed under bench | 2.72M tokens realized on this box<br>(2.60x the 1M ceiling);<br>Pete's Gen5 host: 2.85 GiB ≈ 2.6M tokens | 2,185,581 tokens (2.08x 1M), fixed 2.25 GiB per GPU |
-| Prefill (8k / 16k / 32k) | 6,140 / 5,933 / skipped | 4,005 / 4,508 / 4,425 | — / 6,160 / 8,969; real code 7,697–8,665 |
-| Decode C=1 (0 / 32k / 1M) | 55.5 / skipped / — | 75.8 / 74.8 / 71.7 | 111.8 / 111.1 / — (128k: 105.6) |
-| Bring-up to READY | ~25 min | ~14–17 min on both timed boots<br>(InstantTensor still ~4.5 min);<br>graph capture only 47 s → 13 s warm;<br>page-cache-hot restart including weight load **not** timed | 12–18 min to `expert promotion armed and warmed` (two boots, warm kernel cache) |
-| Speculation | DSpark on (accept 2.3-2.4 tok/step) | DSpark off (it regressed under offload when Pete tried it) | DSpark on, 5 drafts (accept 2.4–2.6 tok/step) |
+| Serve | his compose at `bcf72fe` plus the deltas in `candidates/kraken-1017/` | `candidates/uva/compose/` | `candidates/exl3/reproduce/compose/` |
+| Port | 8019 | 8015 | 8014 |
+| Checkpoint | official 1017 `1bae0e10` | official `fb2764a5` | Pollard 3.51 bpw, 48 shards,<br>428.5 GiB, sha-pinned |
+| Image | `azallaza/ds41-kraken-tp3:20261019.3` (`sha256:c4c2de52…`) | LIL r38 `localinferencelab/vllm@sha256:f41ca8bb…` | GHCR `dsv41f-tempo-sm120-tp3@sha256:ddd31bc7…` (build recipe in repo) |
+| Max context | 1M window (994,842-token needle passed) | 1M window (1M decode cell passed at 1,034,830-token context) | 32k (131k boots, OOMs under bench) |
+| KV pool | 2,185,581 tokens (2.08x 1M), fixed 2.25 GiB per GPU | 2.72M tokens realized on this box<br>(2.60x the 1M ceiling);<br>Pete's Gen5 host: 2.85 GiB ≈ 2.6M tokens | 4 GiB fp8 at 32k;<br>a 7 GiB (reported as 3,479,680 tokens)<br>attempt booted but OOMed under bench |
+| Prefill (8k / 16k / 32k) | — / 6,160 / 8,969; real code 7,697–8,665 | 4,005 / 4,508 / 4,425 | 6,140 / 5,933 / skipped |
+| Decode C=1 (0 / 32k / 1M) | 111.8 / 111.1 / — (128k: 105.6) | 75.8 / 74.8 / 71.7 | 55.5 / skipped / — |
+| Bring-up to READY | 12–18 min to `expert promotion armed and warmed` (two boots, warm kernel cache) | ~14–17 min on both timed boots<br>(InstantTensor still ~4.5 min);<br>graph capture only 47 s → 13 s warm;<br>page-cache-hot restart including weight load **not** timed | ~25 min |
+| Speculation | DSpark on, 5 drafts (accept 2.4–2.6 tok/step) | DSpark off (it regressed under offload when Pete tried it) | DSpark on (accept 2.3-2.4 tok/step) |
 
-On my 3x RTX PRO 6000 Gen4 box, the Kraken 1017 recipe is now the one I
-would serve: fastest decode and prefill in the repo, at 1M context.
-Between the two original candidates, UVA is the better choice for decode
-and long context; EXL3 wins short-context prefill. Pete's Gen5 host (same
-image and flags) prefills 6.8-7.4k, above both of my routes, which is a
-good reminder that PCIe generation changes this picture. I would not
-choose EXL3 over UVA on this hardware unless I specifically needed EXL3:
-if I did, the working config and image build are documented in
-candidates/exl3/, so there is no need to repeat the failed bring-up
-attempts.
+Between the two older routes, UVA is the better choice for decode and
+long context; EXL3 wins short-context prefill. Pete's Gen5 host (same
+image and flags) prefills 6.8-7.4k, above both of my routes, and that
+host is PCIe Gen5. I would not choose EXL3 over UVA on this hardware
+unless I specifically needed EXL3: if I did, the working config and
+image build are documented in candidates/exl3/, so there is no need to
+repeat the failed bring-up attempts.
 
 Numbers are from `llm-inference-bench` sustained-decode runs with no other
 GPU workloads running. Community figures (Pete's Gen5 gist) are cited with
 their provenance, never mixed with my own measurements.
-
-One shared bottleneck worth knowing, on the September r38 image: B12X's
-PCIe all-reduce rejects world size 3, so TP3 falls back to PYNCCL. Pete
-measured that collective at roughly 40% of decode kernel time on his
-box. Writeup:
-[b12x-410-pcie-ar-world3.md](candidates/uva/b12x-410-pcie-ar-world3.md).
-I re-ran the same UVA recipe once a newer image actually accepted world
-size 3. Decode did not budge.
 
 ## Kraken 1017 (2026-10-25)
 
@@ -105,19 +91,15 @@ at one user is 106–119 tok/s, against UVA's ~75 and EXL3's ~55. More
 detail, the compose deltas, and the caveats:
 [candidates/kraken-1017/README.md](candidates/kraken-1017/README.md).
 
-## Correction: EXL3 router bias (2026-10-18)
+## Official checkpoint + decoder-half UVA
 
-The EXL3 image behind every EXL3 number in this repo never loads the MoE
-router's correction bias. The cuda-exl3 MoE method takes over the
-loader of every parameter on the expert layer, the router bias included,
-and then declines the bias quietly. Experts were selected without it.
-The throughput numbers are what the engine did; output quality was never
-measured, and with this bug it cannot be assumed. The UVA route does not
-use cuda-exl3 and is not affected. The fix is open upstream as
-[Zeuss5/cuda-exl3#8](https://github.com/Zeuss5/cuda-exl3/pull/8). Walkthrough:
-[candidates/exl3/README.md](candidates/exl3/README.md#router-bias-not-loaded-found-2026-10-18).
+The official `fb2764a5` checkpoint on the LIL r38 image, with vLLM's UVA
+offloader walking the decoder half instead of the encoder half. Recipe,
+overlay and compose: [candidates/uva/NOTES.md](candidates/uva/NOTES.md).
+The September run and the same-box comparison with EXL3 are in
+[candidates/uva/benchmarks/COMPARE.md](candidates/uva/benchmarks/COMPARE.md).
 
-## Rebench after #410 (2026-10-08)
+### Rebench after #410 (2026-10-08)
 
 I kept everything else the same: official `fb2764a5`, 8.13 GiB of
 decoder-half experts offloaded (ordinals 20–23), DSpark off. Image:
@@ -146,7 +128,7 @@ was holding this box back. I left DSpark off for this run. A two-token
 try is the next section. Longer table:
 [candidates/uva/benchmarks/COMPARE.md](candidates/uva/benchmarks/COMPARE.md).
 
-## Two-token DSpark (2026-10-08)
+### Two-token DSpark (2026-10-08)
 
 Same image and checkpoint as the rebench. I turned DSpark on at 2
 speculative tokens. Pete's K7 measurement on this kind of offload was
@@ -174,7 +156,23 @@ landed around 60. Another gigabyte of experts in RAM made it a little
 slower, about 56, which is the same band as Pete's K7 note. The
 DSpark-off rebench is still the faster decode.
 
-## EXL3 follow-up (2026-10-08)
+### PCIe all-reduce at world size 3
+
+One shared bottleneck worth knowing, on the September r38 image: B12X's
+PCIe all-reduce rejects world size 3, so TP3 falls back to PYNCCL. Pete
+measured that collective at roughly 40% of decode kernel time on his
+box. Writeup:
+[b12x-410-pcie-ar-world3.md](candidates/uva/b12x-410-pcie-ar-world3.md).
+I re-ran the same UVA recipe once a newer image actually accepted world
+size 3. Decode did not budge.
+
+## EXL3 3.51 bpw
+
+The Pollard 3.51 bpw checkpoint on Jake Tempo's cuda-exl3 TP3 port.
+Config, the P0 to P6 tuning series and both failed bring-ups:
+[candidates/exl3/README.md](candidates/exl3/README.md).
+
+### EXL3 follow-up (2026-10-08)
 
 Same P4 config as September, then with DSpark removed. On EXL3 the
 draft is in VRAM with the experts, so this is a different question from
@@ -211,6 +209,19 @@ has a long-prefill number to set next to UVA (about 4.5k–5.3k at
 serving is still the 32k P4 config with DSpark on. The 131k window
 with DSpark off is the long-prefill configuration.
 
+### Correction: EXL3 router bias (2026-10-18)
+
+The EXL3 image behind every EXL3 number in this repo never loads the MoE
+router's correction bias. The cuda-exl3 MoE method takes over the
+loader of every parameter on the expert layer, the router bias included,
+and then declines the bias quietly. Experts were selected without it.
+The throughput numbers are what the engine did; output quality was never
+measured, and with this bug it cannot be assumed. The Kraken and UVA
+routes do not use cuda-exl3 and are not affected. The fix is open
+upstream as
+[Zeuss5/cuda-exl3#8](https://github.com/Zeuss5/cuda-exl3/pull/8). Walkthrough:
+[candidates/exl3/README.md](candidates/exl3/README.md#router-bias-not-loaded-found-2026-10-18).
+
 ## Test setup
 
 - Hardware: 3x RTX PRO 6000 96 GB (SM120) on PCIe 4.0 x16, NODE topology;
@@ -233,6 +244,11 @@ with DSpark off is the long-prefill configuration.
 
 ## What I'd test next
 
+For Kraken 1017: layer 14 read from nvme1's direct mount instead of RAM,
+to see whether a fast drive matches the RAM-pinned numbers. Also
+BoxTops4Coochie's quality suite on this box (lavd, hotel-lights, long retrieval, long
+generation).
+
 Standalone UVA prefill at 64k and above. EXL3's 96k cell landed at
 5,585 tok/s, which is close enough to compare. The 256k/512k/1M UVA
 cells so far are decode-only.
@@ -241,38 +257,33 @@ EXL3 P4 again on an image with the router-bias fix, plus a top-k expert
 agreement check against the official checkpoint, so the EXL3 numbers
 have a quality reading next to them.
 
-For Kraken 1017: layer 14 read from nvme1's direct mount instead of RAM,
-to see whether a fast drive matches the RAM-pinned numbers. Also
-BoxTops4Coochie's quality suite on this box (lavd, hotel-lights, long retrieval, long
-generation).
-
 ## Credits
 
 A warm thanks to the many members of the Local Inference Lab Discord;
 this repo is mostly assembled from their work.
 
-- **Jake Tempo** ([jakejharris/jspark3-deepseek](https://github.com/jakejharris/jspark3-deepseek)):
-  the cuda-exl3 TP3 serving runtime the EXL3 candidate is built on.
-- **tonyd2wild** ([DeepSeek-V4.1-Flash-vLLM-DGX-Spark](https://github.com/tonyd2wild/DeepSeek-V4.1-Flash-vLLM-DGX-Spark)):
-  the upstream TP3 patch set the rebuild applies.
-- **bot-lab-21**: the EXL3 3.51 bpw checkpoint (WestWaters' Pollard method,
-  turboderp's EXL3 format).
-- **[peterkilfeather](https://github.com/peterkilfeather)** (Pete): the
-  decoder-half UVA offload overlay, compose, and the Gen5 measurements
-  ([gist](https://gist.github.com/peterkilfeather/7af387df07ff0df2327b8fd7f77596ed))
-  that candidate B reproduces.
 - **[BoxTops4Coochie](https://github.com/BoxTops4Coochie)**: the Kraken
   TP3 recipe for DeepSeek-V4.1-Flash-1017
   ([RTX-PRO-6000-TP3-Inference-Recipes](https://github.com/BoxTops4Coochie/RTX-PRO-6000-TP3-Inference-Recipes)):
   the `azallaza/ds41-kraken-tp3` image and its TP3 port, in-place
   hot-first expert promotion, the move to FlashInfer's CSF scale
   compression, the Engram row cache, the benchmark and quality scripts, and the Gen5 measurements
-  candidate C is compared with. Thank you for publishing all of it,
+  the Kraken route is compared with. Thank you for publishing all of it,
   including the configurations that did not work.
 - **[infernix](https://github.com/infernix)**: the `ds41f-tp3`
   expert-parking design on karmic-kraken (host-backed VMM regions for
   the decoder-half expert layers, promotion behind an arm file) that the
   Kraken recipe builds on.
+- **[peterkilfeather](https://github.com/peterkilfeather)** (Pete): the
+  decoder-half UVA offload overlay, compose, and the Gen5 measurements
+  ([gist](https://gist.github.com/peterkilfeather/7af387df07ff0df2327b8fd7f77596ed))
+  that the UVA route reproduces.
+- **Jake Tempo** ([jakejharris/jspark3-deepseek](https://github.com/jakejharris/jspark3-deepseek)):
+  the cuda-exl3 TP3 serving runtime the EXL3 candidate is built on.
+- **tonyd2wild** ([DeepSeek-V4.1-Flash-vLLM-DGX-Spark](https://github.com/tonyd2wild/DeepSeek-V4.1-Flash-vLLM-DGX-Spark)):
+  the upstream TP3 patch set the rebuild applies.
+- **bot-lab-21**: the EXL3 3.51 bpw checkpoint (WestWaters' Pollard method,
+  turboderp's EXL3 format).
 - **[voipmonitor](https://github.com/voipmonitor)**: the docker containers
   ([blackwell-llm-docker](https://github.com/local-inference-lab/blackwell-llm-docker))
   and recipes ([rtx6kpro](https://github.com/local-inference-lab/rtx6kpro))
