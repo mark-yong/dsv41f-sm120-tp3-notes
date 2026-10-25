@@ -34,7 +34,6 @@ prompts fell to 2.9-3.8k.
 | | Kraken 1017 (BoxTops4Coochie), Engram in RAM | official checkpoint + UVA | EXL3 3.51 bpw (P4) |
 |---|---|---|---|
 | Serve | his compose at `bcf72fe` plus the deltas in [that directory](candidates/kraken-1017/README.md) | [`compose/`](candidates/uva/compose/) | [`reproduce/compose/`](candidates/exl3/reproduce/compose/) |
-| Port | 8019 | 8015 | 8014 |
 | Checkpoint | official 1017 `1bae0e10` | official `fb2764a5` | Pollard 3.51 bpw, 48 shards,<br>428.5 GiB, sha-pinned |
 | Image | `ds41-kraken-tp3` tag `20261019.3` | LIL r38, `localinferencelab/vllm` | GHCR `dsv41f-tempo-sm120-tp3`,<br>build recipe in repo |
 | Max context | 1M window (994,842-token needle passed) | 1M window (1M decode cell passed at 1,034,830-token context) | 32k (131k boots, OOMs under bench) |
