@@ -91,6 +91,21 @@ at one user is 106–119 tok/s, against UVA's ~75 and EXL3's ~55. More
 detail, the compose deltas, and the caveats:
 [candidates/kraken-1017/README.md](candidates/kraken-1017/README.md).
 
+### Reasoning can surface as content
+
+DeepSeek-V4.1 keeps its DSML control strings as single vocabulary tokens.
+When one of those strings appears in a prompt or a tool result, the
+model can sample the token while writing prose about it, the reasoning
+parser takes it for a real segment boundary, and the rest of the
+thinking is returned as the answer. Three turns in a single session
+leaked that way, 2,158 to 9,157 characters each.
+
+A newer parser does not fix it: delimiters are matched by token
+attribution, so the parser is honouring a token the model produced.
+Removing the strings from inbound prompt text does. On this setup the
+LiteLLM proxy on LXC 114 rewrites them to plain names for the `ds41`
+groups before the request reaches this host.
+
 ## Official checkpoint + decoder-half UVA
 
 The official `fb2764a5` checkpoint on the LIL r38 image, with vLLM's UVA
