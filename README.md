@@ -33,16 +33,21 @@ prompts fell to 2.9-3.8k.
 
 | | Kraken 1017 (BoxTops4Coochie), Engram in RAM | official checkpoint + UVA | EXL3 3.51 bpw (P4) |
 |---|---|---|---|
-| Serve | his compose at `bcf72fe` plus the deltas in `candidates/kraken-1017/` | `candidates/uva/compose/` | `candidates/exl3/reproduce/compose/` |
+| Serve | his compose at `bcf72fe` plus the deltas in [that directory](candidates/kraken-1017/README.md) | [`compose/`](candidates/uva/compose/) | [`reproduce/compose/`](candidates/exl3/reproduce/compose/) |
 | Port | 8019 | 8015 | 8014 |
 | Checkpoint | official 1017 `1bae0e10` | official `fb2764a5` | Pollard 3.51 bpw, 48 shards,<br>428.5 GiB, sha-pinned |
-| Image | `azallaza/ds41-kraken-tp3:20261019.3` (`sha256:c4c2de52…`) | LIL r38 `localinferencelab/vllm@sha256:f41ca8bb…` | GHCR `dsv41f-tempo-sm120-tp3@sha256:ddd31bc7…` (build recipe in repo) |
+| Image | `ds41-kraken-tp3` tag `20261019.3` | LIL r38, `localinferencelab/vllm` | GHCR `dsv41f-tempo-sm120-tp3`,<br>build recipe in repo |
 | Max context | 1M window (994,842-token needle passed) | 1M window (1M decode cell passed at 1,034,830-token context) | 32k (131k boots, OOMs under bench) |
 | KV pool | 2,185,581 tokens (2.08x 1M), fixed 2.25 GiB per GPU | 2.72M tokens realized on this box<br>(2.60x the 1M ceiling);<br>Pete's Gen5 host: 2.85 GiB ≈ 2.6M tokens | 4 GiB fp8 at 32k;<br>a 7 GiB (reported as 3,479,680 tokens)<br>attempt booted but OOMed under bench |
 | Prefill (8k / 16k / 32k) | — / 6,160 / 8,969; real code 7,697–8,665 | 4,005 / 4,508 / 4,425 | 6,140 / 5,933 / skipped |
 | Decode C=1 (0 / 32k / 1M) | 111.8 / 111.1 / — (128k: 105.6) | 75.8 / 74.8 / 71.7 | 55.5 / skipped / — |
-| Bring-up to READY | 12–18 min to `expert promotion armed and warmed` (two boots, warm kernel cache) | ~14–17 min on both timed boots<br>(InstantTensor still ~4.5 min);<br>graph capture only 47 s → 13 s warm;<br>page-cache-hot restart including weight load **not** timed | ~25 min |
+| Bring-up to READY | 12–18 min to expert promotion armed and warmed (two boots, warm kernel cache) | ~14–17 min on both timed boots<br>(InstantTensor still ~4.5 min);<br>graph capture only 47 s → 13 s warm;<br>page-cache-hot restart including weight load **not** timed | ~25 min |
 | Speculation | DSpark on, 5 drafts (accept 2.4–2.6 tok/step) | DSpark off (it regressed under offload when Pete tried it) | DSpark on (accept 2.3-2.4 tok/step) |
+
+Image refs behind the short names: `azallaza/ds41-kraken-tp3:20261019.3`
+(`sha256:c4c2de52…`), `localinferencelab/vllm@sha256:f41ca8bb…` for LIL r38,
+and `dsv41f-tempo-sm120-tp3@sha256:ddd31bc7…` from GHCR, whose build recipe
+is in [candidates/exl3/reproduce](candidates/exl3/reproduce/).
 
 Between the two older routes, UVA is the better choice for decode and
 long context; EXL3 wins short-context prefill. Pete's Gen5 host (same
