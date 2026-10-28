@@ -17,11 +17,13 @@ there, one change was needed. With Engram layer 14 read from disk, as
 upstream ships it, real-text prefill was about 3k tok/s here. With both
 Engram tables pinned in host RAM it was 7.7–8.7k.
 
-Update, 2026-10-28: the problem was the drive, not reading from disk.
-With the checkpoint moved to nvme1 and both Engram tables read from it,
-nothing pinned in RAM, real-code prefill is 7.2–7.4k, decode is
-unchanged or slightly faster, and the server is ready in 4.9 minutes
-instead of 12. See [Rebench from nvme1](#rebench-from-nvme1-2026-10-28).
+Update, 2026-10-28: most of that was the drive. With the checkpoint
+moved to nvme1 and both Engram tables read from it, nothing pinned in
+RAM, real-code prefill is 7.2–7.4k, decode is unchanged or slightly
+faster, and the server is ready in 4.9 minutes instead of 12. Pinning
+both tables still adds up to about 20% on ~100k-token prompts; pinning
+only one of them adds nothing. The stack now runs from nvme1 with both
+pinned. See [Rebench from nvme1](#rebench-from-nvme1-2026-10-28).
 
 ## What runs
 
@@ -43,7 +45,7 @@ His compose is used as is, apart from these changes for this host:
 | `nofile` ulimit removed | this unprivileged container cannot raise it to 1,048,576 under runc |
 | Second read-only mount of `/models/safetensors/DeepSeek-V4.1-Flash-1017-1bae0e10` | the HF cache entry is a symlink farm onto that tree, so the links have to resolve inside the container. Since 2026-10-28 the source is nvme1's direct xfs mount, not the `mergerfs` pool |
 | `XDG_CACHE_HOME` and `TMPDIR` on the `/cache` volume | keeps JIT output off the 8 GiB root filesystem |
-| `ENGRAM_RAM_LAYERS` (upstream default `1`) | `1,14` for the 2026-10-25 runs, empty (both tables read from disk) since 2026-10-28; see below |
+| `ENGRAM_RAM_LAYERS=1,14` (upstream default `1`) | both tables pinned; this host has 500 GB of RAM, his has 256 GB. The 2026-10-28 runs also cover empty, `1` and `14`; see below |
 
 The upstream repo has no licence file, so I have not copied his compose,
 scripts or patches here. Clone his repo at `bcf72fe` and apply the table
@@ -126,9 +128,9 @@ came in higher (8,107 against 6,851), but every prefill cell is one
 sample. Against nvme0, the same disk path is 1.9–2.5x faster on real
 code, which matches the fio gap: it is random 4 KiB IOPS that matter.
 
-So the RAM pinning is no longer needed for speed on this box, though it
-still adds 6–20% to real-code prefill. The stack now runs from nvme1
-with neither table pinned, which leaves that host RAM free.
+So on nvme1 the RAM pinning is no longer what makes this route usable,
+though it still adds 6–20% to real-code prefill. The next two
+subsections work out which table that comes from.
 
 ### Which table to pin, with the checkpoint on nvme1
 
@@ -160,10 +162,10 @@ for 90 seconds. The numbers below are the clean reruns.
 
 Pinning layer 1 on its own buys nothing measurable: real-code prefill
 and both needles land where the unpinned run did, and it costs about
-92 GiB of host RAM and 30–50 s more model load. The gap is layer 14.
-Pinning it as well brings the two ~100k-token code prompts up 14–22%
-(8.6–8.7k against 7.1–7.5k) and the short needle's TTFT down from
-3.6–3.9 s to 3.0 s. The 259k-token prompt and the 994k needle barely move, so the
+92 GiB of host RAM and 30–50 s more model load. Pinning layer 14 as
+well brings the two ~100k-token code prompts up 14–22% (8.6–8.7k
+against 7.1–7.5k) and the short needle's TTFT down from 3.6–3.9 s to
+3.0 s. The 259k-token prompt and the 994k needle barely move, so the
 reads matter most on prompts that are mostly new text at moderate
 length. Both-pinned matches the 2026-10-25 RAM-pinned run from nvme0
 (8,574 / 7,697 / 8,665), so with the tables in RAM the checkpoint's
@@ -181,9 +183,38 @@ minus its ZFS ARC, taken while each configuration was serving; it
 includes every other guest on the host, so only the differences mean
 anything (about 92 GiB for layer 1 and 86 GiB for layer 14).
 
-I restored the unpinned configuration after the sweep. If the 86 GiB
-is free, `ENGRAM_RAM_LAYERS=14` would probably get the both-pinned
-prefill for half the RAM, but I have not run that.
+### Layer 14 alone
+
+That left layer 14 on its own (`ENGRAM_RAM_LAYERS=14`), which would
+have been the cheaper way to get the gain. It is not. I ran a short
+check, the three real-code prompts and then his `bench.py`, straight
+after boot, and repeated the same two phases straight after a
+both-pinned boot so the order matched. Neither run saw outside traffic.
+
+| Straight after boot | Layer 14 pinned, layer 1 from nvme1 | Both pinned |
+|---|---|---|
+| Real-code prefill, 105k / 259k / 102k tokens | 6,446 / 7,233 / 7,449 | **8,304 / 8,054 / 8,104** |
+| Needle, 28,553 tokens (TTFT) | 3.63 s | **3.06 s** |
+| Quick decode (short prompt) | 170.6 / 166.8 (58.2 / 58.6 steps/s) | 167.4 / 179.8 (58.7 / 60.7 steps/s) |
+| 4 concurrent short | 307.2 | 281.1 |
+| Known answers | 5/5 | 5/5 |
+| Container start to promotion armed | 5.0 min | 5.9 min |
+| Hypervisor RAM in use while serving, less ZFS ARC | 209 GiB | 295 GiB |
+
+Pinned on its own, layer 14 lands where the unpinned and layer-1 runs
+did, for about the same 92 GiB. The gain only shows once neither
+table is read from the drive. My guess is that any table left on disk
+puts the io_uring reader on the prefill path, and that wait costs about
+the same whether it serves one table or two. I have not profiled that.
+The both-pinned short check lands within the sweep's both-pinned
+range, so the order of the bench phases is not what made the
+difference.
+
+So on this host it is both tables or neither. The stack now runs with
+`ENGRAM_RAM_LAYERS=1,14` from nvme1: about 178 GiB of host RAM for
+14–22% more prefill on ~100k-token prompts and roughly a minute more
+boot. If that RAM is wanted elsewhere, unpinned from nvme1 is the
+fallback, and decode is the same either way.
 
 ## Against upstream
 
@@ -278,6 +309,9 @@ the configured limit.
 - `bench/nvme1-l1ram/` and `bench/nvme1-bothram/`: the same day, from
   nvme1, with layer 1 pinned and with both tables pinned. Phases that
   had outside traffic hold the clean rerun.
+- `bench/nvme1-l14ram/` and `bench/nvme1-bothram-short/`: the short
+  checks (`prefill_real_code.json` and `quick.json` only) with layer 14
+  pinned on its own and with both pinned, each run straight after boot.
 
 Each holds `llm_decode_bench_prefill.json`, `llm_decode_bench.json`
 (his cells plus the coding peak), `repo_cells.json` (this repo's cells),

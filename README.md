@@ -5,13 +5,13 @@ attempts from serving DeepSeek-V4.1-Flash at TP3 on my 3x RTX PRO 6000
 (SM120) box. Three routes are up, and a fourth is in progress.
 
 Kraken 1017 is the one I serve. On this box decode at one user is
-118-122 tok/s, real-code prefill 7.2-7.4k tok/s, and a 994,842-token
+115-124 tok/s, real-code prefill 7.5-8.7k tok/s, and a 994,842-token
 needle passes inside the 1M window. It serves the official 1017 weights
-with DSpark on, and is ready 4.9 minutes after container start. The
-change it needed here was a fast drive for the Engram tables: with
-layer 14 read from nvme0, as upstream ships it, real-code prefill fell
-to 2.9-3.8k. Pinning both tables in RAM brought it to 7.7-8.7k, and
-reading both from nvme1 with nothing pinned gets 7.2-7.4k
+with DSpark on, from nvme1 with both Engram tables pinned in RAM, and is
+ready about 6 minutes after container start. With layer 14 read from
+nvme0, as upstream ships it, real-code prefill fell to 2.9-3.8k. Reading
+both tables from nvme1 with nothing pinned gets 7.2-7.4k; pinning only
+one of them adds nothing
 ([rebench, 2026-10-28](#rebench-from-nvme1-2026-10-28)).
 
 ## Routes
@@ -33,16 +33,16 @@ reading both from nvme1 with nothing pinned gets 7.2-7.4k
 
 ## Result
 
-| | Kraken 1017 (BoxTops4Coochie), checkpoint on nvme1 | official checkpoint + UVA | EXL3 3.51 bpw (P4) |
+| | Kraken 1017 (BoxTops4Coochie), nvme1, Engram in RAM | official checkpoint + UVA | EXL3 3.51 bpw (P4) |
 |---|---|---|---|
 | Serve | his compose at `bcf72fe` plus the deltas in [that directory](candidates/kraken-1017/README.md) | [`compose/`](candidates/uva/compose/) | [`reproduce/compose/`](candidates/exl3/reproduce/compose/) |
-| Checkpoint | official 1017 `1bae0e10`,<br>Engram tables read from nvme1 | official `fb2764a5` | Pollard 3.51 bpw, 48 shards,<br>428.5 GiB, sha-pinned |
+| Checkpoint | official 1017 `1bae0e10` on nvme1,<br>both Engram tables pinned in RAM | official `fb2764a5` | Pollard 3.51 bpw, 48 shards,<br>428.5 GiB, sha-pinned |
 | Image | `ds41-kraken-tp3` tag `20261019.3` | LIL r38, `localinferencelab/vllm` | GHCR `dsv41f-tempo-sm120-tp3`,<br>build recipe in repo |
 | Max context | 1M window (994,842-token needle passed) | 1M window (1M decode cell passed at 1,034,830-token context) | 32k (131k boots, OOMs under bench) |
 | KV pool | 2,185,581 tokens (2.08x 1M), fixed 2.25 GiB per GPU | 2.72M tokens realized on this box<br>(2.60x the 1M ceiling);<br>Pete's Gen5 host: 2.85 GiB ≈ 2.6M tokens | 4 GiB fp8 at 32k;<br>a 7 GiB (reported as 3,479,680 tokens)<br>attempt booted but OOMed under bench |
-| Prefill (8k / 16k / 32k) | — / 8,282 / 8,397;<br>real code 7,171–7,419 | 4,005 / 4,508 / 4,425 | 6,140 / 5,933 / skipped |
-| Decode C=1 (0 / 32k / 1M) | 120.9 / 121.5 / — (128k: 120.0) | 75.8 / 74.8 / 71.7 | 55.5 / skipped / — |
-| Bring-up to READY | 4.9 min to expert promotion armed and warmed from nvme1;<br>12–18 min on the two earlier nvme0 boots<br>(warm kernel cache on all three) | ~14–17 min on both timed boots<br>(InstantTensor still ~4.5 min);<br>graph capture only 47 s → 13 s warm;<br>page-cache-hot restart including weight load **not** timed | ~25 min |
+| Prefill (8k / 16k / 32k) | — / 7,687 / 9,305;<br>real code 7,538–8,663 | 4,005 / 4,508 / 4,425 | 6,140 / 5,933 / skipped |
+| Decode C=1 (0 / 32k / 1M) | 117.8 / 115.3 / — (128k: 114.7) | 75.8 / 74.8 / 71.7 | 55.5 / skipped / — |
+| Bring-up to READY | 5.6–5.9 min to expert promotion armed and warmed<br>(4.4–4.9 min with nothing pinned);<br>12–18 min on the two earlier nvme0 boots<br>(warm kernel cache on all) | ~14–17 min on both timed boots<br>(InstantTensor still ~4.5 min);<br>graph capture only 47 s → 13 s warm;<br>page-cache-hot restart including weight load **not** timed | ~25 min |
 | Speculation | DSpark on, 5 drafts (accept 2.4–2.7 tok/step) | DSpark off (it regressed under offload when Pete tried it) | DSpark on (accept 2.3-2.4 tok/step) |
 
 Image refs behind the short names: `azallaza/ds41-kraken-tp3:20261019.3`
@@ -121,22 +121,27 @@ level with it or a few percent ahead, which I would read as noise. Boot
 is the bigger change: the 475 GiB weight read took 77 s instead of
 337–424 s. I did not drop the page cache first, so that is not a
 controlled cold boot, but most of the checkpoint cannot have been
-cached. The stack now serves from nvme1 with both tables on disk.
+cached.
 
-I then tried the two pinned placements from nvme1 as well:
+I then tried the pinned placements from nvme1 as well. Layer 14 on its
+own was a shorter check (real code and the 28k needle only), run
+straight after boot; a both-pinned boot checked the same way got 8,304
+/ 8,054 / 8,104.
 
-| From nvme1 | Neither pinned | Layer 1 pinned | Both pinned |
-|---|---|---|---|
-| Real-code prefill (105k / 259k / 102k tokens) | 7,171 / 7,272 / 7,419 | 7,117 / 7,567 / 7,530 | 8,663 / 7,538 / 8,591 |
-| 994,842-token needle | pass, 6,456 tok/s | pass, 6,399 tok/s | pass, 6,654 tok/s |
-| Engine steps/s at 32k, 1 user | 47.1 | 47.1 | 48.3 |
-| Container start to promotion armed | 4.4–4.9 min | 5.0–5.3 min | 5.6 min |
-| Extra host RAM | — | ~92 GiB | ~178 GiB |
+| From nvme1 | Neither pinned | Layer 1 pinned | Layer 14 pinned | Both pinned |
+|---|---|---|---|---|
+| Real-code prefill (105k / 259k / 102k tokens) | 7,171 / 7,272 / 7,419 | 7,117 / 7,567 / 7,530 | 6,446 / 7,233 / 7,449 | 8,663 / 7,538 / 8,591 |
+| 28k needle TTFT | 3.89 s | 3.63 s | 3.63 s | 3.02 s |
+| 994,842-token needle | pass, 6,456 tok/s | pass, 6,399 tok/s | not run | pass, 6,654 tok/s |
+| Engine steps/s at 32k, 1 user | 47.1 | 47.1 | not run | 48.3 |
+| Container start to promotion armed | 4.4–4.9 min | 5.0–5.3 min | 5.0 min | 5.6–5.9 min |
+| Extra host RAM | — | ~92 GiB | ~92 GiB | ~178 GiB |
 
-Pinning layer 1 alone changes nothing measurable. Layer 14 is the one
-worth pinning: it adds 14–22% on the ~100k-token code prompts and
-matches the RAM-pinned run from nvme0. Decode does not depend on
-placement. Details, and how I kept Hermes traffic out of the numbers:
+Pinning either table on its own changes nothing measurable. With both
+pinned, the ~100k-token code prompts gain 14–22% and match the
+RAM-pinned run from nvme0. Decode does not depend on placement. The
+stack now serves from nvme1 with both tables pinned. Details, and how I
+kept Hermes traffic out of the numbers:
 [candidates/kraken-1017/README.md](candidates/kraken-1017/README.md#which-table-to-pin-with-the-checkpoint-on-nvme1).
 
 ### Reasoning can surface as content
