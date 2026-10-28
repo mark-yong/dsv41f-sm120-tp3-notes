@@ -123,6 +123,22 @@ is the bigger change: the 475 GiB weight read took 77 s instead of
 controlled cold boot, but most of the checkpoint cannot have been
 cached. The stack now serves from nvme1 with both tables on disk.
 
+I then tried the two pinned placements from nvme1 as well:
+
+| From nvme1 | Neither pinned | Layer 1 pinned | Both pinned |
+|---|---|---|---|
+| Real-code prefill (105k / 259k / 102k tokens) | 7,171 / 7,272 / 7,419 | 7,117 / 7,567 / 7,530 | 8,663 / 7,538 / 8,591 |
+| 994,842-token needle | pass, 6,456 tok/s | pass, 6,399 tok/s | pass, 6,654 tok/s |
+| Engine steps/s at 32k, 1 user | 47.1 | 47.1 | 48.3 |
+| Container start to promotion armed | 4.4–4.9 min | 5.0–5.3 min | 5.6 min |
+| Extra host RAM | — | ~92 GiB | ~178 GiB |
+
+Pinning layer 1 alone changes nothing measurable. Layer 14 is the one
+worth pinning: it adds 14–22% on the ~100k-token code prompts and
+matches the RAM-pinned run from nvme0. Decode does not depend on
+placement. Details, and how I kept Hermes traffic out of the numbers:
+[candidates/kraken-1017/README.md](candidates/kraken-1017/README.md#which-table-to-pin-with-the-checkpoint-on-nvme1).
+
 ### Reasoning can surface as content
 
 DeepSeek-V4.1 keeps its DSML control strings as single vocabulary tokens.

@@ -130,6 +130,61 @@ So the RAM pinning is no longer needed for speed on this box, though it
 still adds 6–20% to real-code prefill. The stack now runs from nvme1
 with neither table pinned, which leaves that host RAM free.
 
+### Which table to pin, with the checkpoint on nvme1
+
+Same day, same boot procedure. I ran two more configurations from nvme1
+to see which table the prefill gap comes from: layer 1 pinned with
+layer 14 read from the drive (upstream's default), and both pinned.
+This server also backs my Hermes agent's LiteLLM lanes, and Hermes was
+in use during the sweep. Where requests from outside the bench landed inside
+a bench phase (the layer-1 needle and the both-pinned `llm_decode_bench`
+prefill), I reran that phase once the server had seen no outside traffic
+for 90 seconds. The numbers below are the clean reruns.
+
+| | Neither pinned | Layer 1 pinned, layer 14 from nvme1 | Both pinned |
+|---|---|---|---|
+| Real-code prefill, 105k / 259k / 102k tokens | 7,171 / 7,272 / 7,419 | 7,117 / 7,567 / 7,530 | **8,663 / 7,538 / 8,591** |
+| Needle, 28,553 tokens (TTFT) | 3.89 s | 3.63 s | **3.02 s** |
+| Needle, 994,842 tokens | pass, 6,456 tok/s | pass, 6,399 tok/s | **pass, 6,654 tok/s** |
+| `llm_decode_bench` prefill 32k / 128k | 8,486 / 8,107 | 8,524 / 7,434 | 9,355 / 8,330 |
+| Decode 32k, 1 / 4 users | 117.3 / 208.7 | 111.1 / 193.3 | 127.7 / 207.5 |
+| Decode 128k, 1 / 4 users | 122.5 / 194.4 | 118.9 / 204.4 | 121.3 / 196.6 |
+| Engine steps/s 32k, 1 / 4 users | 47.1 / 83.1 | 47.1 / 81.3 | 48.3 / 86.7 |
+| Decode C=1, repo cells (0 / 16k / 32k / 128k) | 120.9 / 118.3 / 121.5 / 120.0 | 114.6 / 119.8 / 112.4 / 112.0 | 117.8 / 124.1 / 115.3 / 114.7 |
+| Coding peak (3 runs, mean) | 178.2 | 182.1 | 177.9 |
+| 4 concurrent short | 286.3 | 281.4 | 304.6 |
+| Known answers | 5/5 | 5/5 | 5/5 |
+| Container start to promotion armed | 4.9 min, 4.4 min | 5.0 min, 5.3 min | 5.6 min |
+| `Loading weights took` / model load (rank 0) | 77 s / 108 s, 65 s / 93 s | 79 s / 139 s, 81 s / 147 s | 95 s / 182 s |
+| Hypervisor RAM in use while serving, less ZFS ARC | 117 GiB | 209 GiB | 295 GiB |
+
+Pinning layer 1 on its own buys nothing measurable: real-code prefill
+and both needles land where the unpinned run did, and it costs about
+92 GiB of host RAM and 30–50 s more model load. The gap is layer 14.
+Pinning it as well brings the two ~100k-token code prompts up 14–22%
+(8.6–8.7k against 7.1–7.5k) and the short needle's TTFT down from
+3.6–3.9 s to 3.0 s. The 259k-token prompt and the 994k needle barely move, so the
+reads matter most on prompts that are mostly new text at moderate
+length. Both-pinned matches the 2026-10-25 RAM-pinned run from nvme0
+(8,574 / 7,697 / 8,665), so with the tables in RAM the checkpoint's
+drive no longer shows in prefill.
+
+Decode does not depend on placement. Engine steps/s is 47–48 in all
+three. The tok/s spread at 1 user follows the accept length, which at
+temperature 1 ran 2.36 to 2.64 tokens per step between runs.
+
+Boot times include a warm page cache to some degree: the checkpoint
+stays cached on nvme1's xfs mount between restarts, which `mergerfs`
+did not allow. The two unpinned boots, 4.9 and 4.4 minutes, give an
+idea of the spread. The RAM column is the hypervisor's used memory
+minus its ZFS ARC, taken while each configuration was serving; it
+includes every other guest on the host, so only the differences mean
+anything (about 92 GiB for layer 1 and 86 GiB for layer 14).
+
+I restored the unpinned configuration after the sweep. If the 86 GiB
+is free, `ENGRAM_RAM_LAYERS=14` would probably get the both-pinned
+prefill for half the RAM, but I have not run that.
+
 ## Against upstream
 
 Same scripts and the same `llm_decode_bench` version (0.7.8) as his
@@ -220,6 +275,9 @@ the configured limit.
 - `bench/engram-ram/`: the run with both Engram tables in RAM.
 - `bench/nvme1-disk/`: the 2026-10-28 rebench, checkpoint on nvme1's
   direct mount and both Engram tables read from it.
+- `bench/nvme1-l1ram/` and `bench/nvme1-bothram/`: the same day, from
+  nvme1, with layer 1 pinned and with both tables pinned. Phases that
+  had outside traffic hold the clean rerun.
 
 Each holds `llm_decode_bench_prefill.json`, `llm_decode_bench.json`
 (his cells plus the coding peak), `repo_cells.json` (this repo's cells),
