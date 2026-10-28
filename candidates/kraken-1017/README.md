@@ -17,6 +17,12 @@ there, one change was needed. With Engram layer 14 read from disk, as
 upstream ships it, real-text prefill was about 3k tok/s here. With both
 Engram tables pinned in host RAM it was 7.7–8.7k.
 
+Update, 2026-10-28: the problem was the drive, not reading from disk.
+With the checkpoint moved to nvme1 and both Engram tables read from it,
+nothing pinned in RAM, real-code prefill is 7.2–7.4k, decode is
+unchanged or slightly faster, and the server is ready in 4.9 minutes
+instead of 12. See [Rebench from nvme1](#rebench-from-nvme1-2026-10-28).
+
 ## What runs
 
 | | |
@@ -35,15 +41,15 @@ His compose is used as is, apart from these changes for this host:
 |---|---|
 | Host port 8019 bound to the host's LAN IP instead of `:15015` on all interfaces | the inference host's firewall only opens LAN-IP ports |
 | `nofile` ulimit removed | this unprivileged container cannot raise it to 1,048,576 under runc |
-| Second read-only mount of `/models/safetensors/DeepSeek-V4.1-Flash-1017-1bae0e10` | the HF cache entry is a symlink farm onto that tree, so the links have to resolve inside the container |
+| Second read-only mount of `/models/safetensors/DeepSeek-V4.1-Flash-1017-1bae0e10` | the HF cache entry is a symlink farm onto that tree, so the links have to resolve inside the container. Since 2026-10-28 the source is nvme1's direct xfs mount, not the `mergerfs` pool |
 | `XDG_CACHE_HOME` and `TMPDIR` on the `/cache` volume | keeps JIT output off the 8 GiB root filesystem |
-| `ENGRAM_RAM_LAYERS=1,14` (upstream default `1`) | see below; this host has 500 GB of RAM, his has 256 GB |
+| `ENGRAM_RAM_LAYERS` (upstream default `1`) | `1,14` for the 2026-10-25 runs, empty (both tables read from disk) since 2026-10-28; see below |
 
 The upstream repo has no licence file, so I have not copied his compose,
 scripts or patches here. Clone his repo at `bcf72fe` and apply the table
 above.
 
-## Engram layer 14 belongs in RAM on this host
+## Engram layer 14 on a slow drive
 
 Upstream keeps Engram layer 1 pinned in RAM and reads layer 14 from the
 checkpoint with io_uring, with a 2 GiB-per-GPU row cache in front. His
@@ -85,33 +91,67 @@ to the drive, so part of shard 48 was still in the hypervisor's page
 cache from the boot-time load. nvme0 has no SMART warnings, sits at
 46 °C, and was otherwise idle. It is just slow at small random reads.
 
-I have not served layer 14 from nvme1. With the RAM to spare, pinning it
-is simpler. The stack now runs with `ENGRAM_RAM_LAYERS=1,14` in its
-`.env`. If that RAM is needed elsewhere, the fallback is the checkpoint
-on nvme1, mounted directly rather than through `mergerfs`.
+At the time I pinned both tables in RAM rather than move the checkpoint.
+The next section is the move.
+
+## Rebench from nvme1 (2026-10-28)
+
+The checkpoint now lives on nvme1 (sha256-verified after the copy) and
+the container mounts nvme1's xfs filesystem directly, without
+`mergerfs`. `ENGRAM_RAM_LAYERS` is empty, so both Engram tables are read
+from the drive through the 2 GiB-per-GPU row caches. That is less RAM
+than upstream, which keeps layer 1 pinned. nvme1 sits on a Gen4 x4 link
+here. Image, compose and KV pool (2,185,581 tokens) are unchanged. I
+recreated the container, then ran the same `run_all.sh` sequence once
+`expert promotion armed and warmed` was logged. All 60 requests in the
+run window came from the bench host.
+
+| | Layer 14 on nvme0 (mergerfs) | Layers 1 and 14 in RAM | **Both on nvme1, direct** | Upstream (Gen5) |
+|---|---|---|---|---|
+| Real-code prefill, 105k / 259k / 102k tokens | 2,917 / 3,789 / 3,842 | 8,574 / 7,697 / 8,665 | **7,171 / 7,272 / 7,419** | 10,646 / 10,228 / 11,354 |
+| Needle, 28,553 tokens (TTFT) | 9.79 s | 3.07 s | **3.89 s** | 2.29 s |
+| Needle, 994,842 tokens | pass, 4,675 tok/s | pass, 6,747 tok/s | **pass, 6,456 tok/s** | pass, 7,193 tok/s |
+| `llm_decode_bench` prefill 32k / 128k (synthetic filler) | 7,765 / 8,035 | 8,347 / 6,851 | **8,486 / 8,107** | 13,486 / 12,245 |
+| Decode 32k, 1 / 4 users | 94.9 / 170.3 | 113.9 / 200.1 | **117.3 / 208.7** | 186.7 / 340.7 |
+| Decode 128k, 1 / 4 users | 92.4 / 179.0 | 118.8 / 193.2 | **122.5 / 194.4** | 179.2 / 307.1 |
+| Engine steps/s 32k, 1 / 4 users | 39.8 / 69.4 | 45.7 / 81.2 | **47.1 / 83.1** | 67.5 / 139.9 |
+| Coding peak (3 runs, mean) | 165.8 | 181.2 | **178.2** | 271.8 |
+| 4 concurrent short | 240.4 | 289.7 | **286.3** | 474.3 |
+| Known answers | 5/5 | 5/5 | **5/5** | 5/5 |
+
+Real-code prefill from nvme1 is 84–94% of the RAM-pinned run, and the
+983k needle 96%. Decode is the same or a few percent faster, within what
+I would call run-to-run noise. The 128k `llm_decode_bench` prefill cell
+came in higher (8,107 against 6,851), but every prefill cell is one
+sample. Against nvme0, the same disk path is 1.9–2.5x faster on real
+code, which matches the fio gap: it is random 4 KiB IOPS that matter.
+
+So the RAM pinning is no longer needed for speed on this box, though it
+still adds 6–20% to real-code prefill. The stack now runs from nvme1
+with neither table pinned, which leaves that host RAM free.
 
 ## Against upstream
 
 Same scripts and the same `llm_decode_bench` version (0.7.8) as his
-`bench-20261019.3/` run, same cells, from a fresh restart. These are the
-RAM-pinned numbers.
+`bench-20261019.3/` run, same cells, from a fresh restart. The ratio
+column is for the RAM-pinned run; the nvme1 rebench is next to it.
 
-| | This box (Gen4) | Upstream (Gen5) | Ratio |
-|---|---|---|---|
-| `llm_decode_bench` prefill 32k / 128k | 8,347 / 6,851 | 13,486 / 12,245 | 0.62 / 0.56 |
-| Real-code prefill (3 prompts) | 8,574 / 7,697 / 8,665 | 10,646 / 10,228 / 11,354 | 0.75–0.81 |
-| 983k needle | 6,747 tok/s, peak 97,339 MiB | 7,193 tok/s, peak 97,319 MiB | 0.94 |
-| Decode 32k, C1 / C4 | 113.9 / 200.1 | 186.7 / 340.7 | 0.61 / 0.59 |
-| Decode 128k, C1 / C4 | 118.8 / 193.2 | 179.2 / 307.1 | 0.66 / 0.63 |
-| Engine steps/s 32k, C1 / C4 | 45.7 / 81.2 | 67.5 / 139.9 | 0.68 / 0.58 |
-| Coding peak (3 runs, mean) | 181.2 | 271.8 | 0.67 |
-| Quick decode (short prompt) | 170.1 / 174.0 (59.5 / 58.9 steps/s) | 228.5 / 223.3 (79.1 / 79.4) | 0.75 |
-| 4 concurrent short | 289.7 | 474.3 | 0.61 |
-| Known answers | 5/5 | 5/5 | |
+| | This box, RAM-pinned (2026-10-25) | This box, nvme1 (2026-10-28) | Upstream (Gen5) | Ratio (RAM-pinned) |
+|---|---|---|---|---|
+| `llm_decode_bench` prefill 32k / 128k | 8,347 / 6,851 | 8,486 / 8,107 | 13,486 / 12,245 | 0.62 / 0.56 |
+| Real-code prefill (3 prompts) | 8,574 / 7,697 / 8,665 | 7,171 / 7,272 / 7,419 | 10,646 / 10,228 / 11,354 | 0.75–0.81 |
+| 983k needle | 6,747 tok/s, peak 97,339 MiB | 6,456 tok/s, peak 97,333 MiB | 7,193 tok/s, peak 97,319 MiB | 0.94 |
+| Decode 32k, C1 / C4 | 113.9 / 200.1 | 117.3 / 208.7 | 186.7 / 340.7 | 0.61 / 0.59 |
+| Decode 128k, C1 / C4 | 118.8 / 193.2 | 122.5 / 194.4 | 179.2 / 307.1 | 0.66 / 0.63 |
+| Engine steps/s 32k, C1 / C4 | 45.7 / 81.2 | 47.1 / 83.1 | 67.5 / 139.9 | 0.68 / 0.58 |
+| Coding peak (3 runs, mean) | 181.2 | 178.2 | 271.8 | 0.67 |
+| Quick decode (short prompt) | 170.1 / 174.0 (59.5 / 58.9 steps/s) | 166.6 / 167.2 (57.7 / 55.9 steps/s) | 228.5 / 223.3 (79.1 / 79.4) | 0.75 |
+| 4 concurrent short | 289.7 | 286.3 | 474.3 | 0.61 |
+| Known answers | 5/5 | 5/5 | 5/5 | |
 
-Accept length at 1 user was 2.4–2.6 tokens per step on the bench filler
-here, against 2.7–2.8 in his run, so part of the tok/s gap is acceptance
-at temperature 1. Steps/s is the cleaner comparison: about two thirds of
+Accept length at 1 user was 2.4–2.7 tokens per step on the bench filler
+here, across both runs, against 2.7–2.8 in his run, so part of the
+tok/s gap is acceptance at temperature 1. Steps/s is the cleaner comparison: about two thirds of
 his rate at 1 user.
 
 The rest is most likely the PCIe link. The non-promoted experts in
@@ -128,35 +168,43 @@ The repo's usual cells, one request at a time: contexts 0 / 16k / 32k /
 newer than the one behind the UVA and EXL3 rows (0.7.8 against 0.4.32),
 with the cell settings matched.
 
-| | Kraken 1017, Engram in RAM | UVA rebench (2026-10-08) | EXL3 P4 |
-|---|---|---|---|
-| Weights | official 1017 `1bae0e10` | official `fb2764a5` | Pollard 3.51 bpw |
-| Decode C=1 (0 / 16k / 32k / 128k) | **111.8 / 119.2 / 111.1 / 105.6** | 76.3 / 75.9 / 74.6 / 74.5 | 55.5 / 56.0 / skipped / — |
-| Prefill, bench filler (16k / 32k / 128k) | **6,160 / 8,969 / 8,140** | 4,650 / 5,274 / 4,629 | 5,933 / skipped / failed |
-| Prefill, real code | 7,697–8,665 | not measured | not measured |
-| 983k needle | pass, 6,747 tok/s | 1M decode-only cell, no prefill | — |
-| Max context | 1M | 1M | 32k |
-| Speculation | DSpark, 5 drafts | off | DSpark |
+| | Kraken 1017, nvme1 (2026-10-28) | Kraken 1017, Engram in RAM (2026-10-25) | UVA rebench (2026-10-08) | EXL3 P4 |
+|---|---|---|---|---|
+| Weights | official 1017 `1bae0e10` | official 1017 `1bae0e10` | official `fb2764a5` | Pollard 3.51 bpw |
+| Decode C=1 (0 / 16k / 32k / 128k) | **120.9 / 118.3 / 121.5 / 120.0** | 111.8 / 119.2 / 111.1 / 105.6 | 76.3 / 75.9 / 74.6 / 74.5 | 55.5 / 56.0 / skipped / — |
+| Prefill, bench filler (16k / 32k / 128k) | **8,282 / 8,397 / 7,778** | 6,160 / 8,969 / 8,140 | 4,650 / 5,274 / 4,629 | 5,933 / skipped / failed |
+| Prefill, real code | 7,171–7,419 | 7,697–8,665 | not measured | not measured |
+| 983k needle | pass, 6,456 tok/s | pass, 6,747 tok/s | 1M decode-only cell, no prefill | — |
+| Max context | 1M | 1M | 1M | 32k |
+| Speculation | DSpark, 5 drafts | DSpark, 5 drafts | off | DSpark |
 
-The 16k prefill cell is a single sample and came in under the 32k one
-(6,160 against 8,969). The disk-backed run had 7,618 at 16k, so I would
-read it as noise. Every prefill cell in this repo is one sample.
+The RAM-pinned run's 16k prefill cell is a single sample and came in
+under its 32k one (6,160 against 8,969). The disk-backed run had 7,618
+at 16k and the nvme1 run 8,282, so I would read it as noise. Every
+prefill cell in this repo is one sample.
 
-Decode is 42–57% ahead of UVA at every context. On the filler,
-prefill is 1.3–1.8x UVA's. The UVA route has not been measured on real
-code, so I am not putting those two side by side.
+On the nvme1 run, decode is 56–63% ahead of UVA at every context (the
+RAM-pinned run was 42–57%). On the filler, prefill is 1.6–1.8x UVA's.
+The UVA route has not been measured on real code, so I am not putting
+those two side by side.
 
 ## Bring-up
 
-| | Disk-backed boot | RAM-pinned boot |
-|---|---|---|
-| Container start to `expert promotion armed and warmed` | 17.7 min | 12.0 min |
-| `Loading weights took` (rank 0) | 337 s | 424 s, includes pinning layer 14 |
+| | Disk-backed boot (nvme0) | RAM-pinned boot (nvme0) | nvme1 boot (2026-10-28) |
+|---|---|---|---|
+| Container start to `expert promotion armed and warmed` | 17.7 min | 12.0 min | **4.9 min** |
+| `Loading weights took` (rank 0) | 337 s | 424 s, includes pinning layer 14 | **77 s** |
 
-Graph capture on the RAM-pinned boot took 7 s. Both boots reused the
-same `runtime-cache` volume. I did not time a
-fresh-volume boot; upstream says it adds about 10 minutes of kernel
-compilation.
+On the nvme1 boot, the API server was up 4 min 47 s after container
+start and expert promotion finished 6 s later. Model load took 108 s in
+total, the 77 s weight read plus the DSpark drafter, and engine init (profile, KV
+cache, warm-up) took 94 s, including 8 s of graph capture. Graph capture
+on the RAM-pinned boot took 7 s. All three boots reused the same
+`runtime-cache` volume. I did not drop the page cache before the nvme1
+boot. The checkpoint is 475 GiB against about 140 GiB of page cache on
+the hypervisor, so most of it must have come off the drive, but this is
+not a controlled cold boot. I did not time a fresh-volume boot; upstream
+says it adds about 10 minutes of kernel compilation.
 
 ## What I have not run
 
@@ -170,6 +218,8 @@ the configured limit.
 - `bench/baseline-mergerfs/`: the first run, layer 14 read from the
   checkpoint through mergerfs.
 - `bench/engram-ram/`: the run with both Engram tables in RAM.
+- `bench/nvme1-disk/`: the 2026-10-28 rebench, checkpoint on nvme1's
+  direct mount and both Engram tables read from it.
 
 Each holds `llm_decode_bench_prefill.json`, `llm_decode_bench.json`
 (his cells plus the coding peak), `repo_cells.json` (this repo's cells),
@@ -180,6 +230,6 @@ same as his.
 
 ---
 
-*Measured 2026-10-25. 3x RTX PRO 6000 96 GB (SM120) on PCIe 4.0 x16,
+*Measured 2026-10-25, nvme1 rebench 2026-10-28. 3x RTX PRO 6000 96 GB (SM120) on PCIe 4.0 x16,
 NODE topology, driver 615.71.09. GPUs exclusive to this stack during
 every run.*

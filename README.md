@@ -4,13 +4,15 @@ This repo holds the configs, compose files, bench output and failed
 attempts from serving DeepSeek-V4.1-Flash at TP3 on my 3x RTX PRO 6000
 (SM120) box. Three routes are up, and a fourth is in progress.
 
-Kraken 1017 is the one I would serve. On this box decode at one user is
-106-119 tok/s, real-code prefill 7.7-8.7k tok/s, and a 994,842-token
+Kraken 1017 is the one I serve. On this box decode at one user is
+118-122 tok/s, real-code prefill 7.2-7.4k tok/s, and a 994,842-token
 needle passes inside the 1M window. It serves the official 1017 weights
-with DSpark on. The change it needed here was RAM: with the Engram tables
-pinned, both of them, real-code prefill holds at 7.7-8.7k; with layer 14
-read from the checkpoint's disk path, as upstream ships it, the same
-prompts fell to 2.9-3.8k.
+with DSpark on, and is ready 4.9 minutes after container start. The
+change it needed here was a fast drive for the Engram tables: with
+layer 14 read from nvme0, as upstream ships it, real-code prefill fell
+to 2.9-3.8k. Pinning both tables in RAM brought it to 7.7-8.7k, and
+reading both from nvme1 with nothing pinned gets 7.2-7.4k
+([rebench, 2026-10-28](#rebench-from-nvme1-2026-10-28)).
 
 ## Routes
 
@@ -31,17 +33,17 @@ prompts fell to 2.9-3.8k.
 
 ## Result
 
-| | Kraken 1017 (BoxTops4Coochie), Engram in RAM | official checkpoint + UVA | EXL3 3.51 bpw (P4) |
+| | Kraken 1017 (BoxTops4Coochie), checkpoint on nvme1 | official checkpoint + UVA | EXL3 3.51 bpw (P4) |
 |---|---|---|---|
 | Serve | his compose at `bcf72fe` plus the deltas in [that directory](candidates/kraken-1017/README.md) | [`compose/`](candidates/uva/compose/) | [`reproduce/compose/`](candidates/exl3/reproduce/compose/) |
-| Checkpoint | official 1017 `1bae0e10` | official `fb2764a5` | Pollard 3.51 bpw, 48 shards,<br>428.5 GiB, sha-pinned |
+| Checkpoint | official 1017 `1bae0e10`,<br>Engram tables read from nvme1 | official `fb2764a5` | Pollard 3.51 bpw, 48 shards,<br>428.5 GiB, sha-pinned |
 | Image | `ds41-kraken-tp3` tag `20261019.3` | LIL r38, `localinferencelab/vllm` | GHCR `dsv41f-tempo-sm120-tp3`,<br>build recipe in repo |
 | Max context | 1M window (994,842-token needle passed) | 1M window (1M decode cell passed at 1,034,830-token context) | 32k (131k boots, OOMs under bench) |
 | KV pool | 2,185,581 tokens (2.08x 1M), fixed 2.25 GiB per GPU | 2.72M tokens realized on this box<br>(2.60x the 1M ceiling);<br>Pete's Gen5 host: 2.85 GiB ≈ 2.6M tokens | 4 GiB fp8 at 32k;<br>a 7 GiB (reported as 3,479,680 tokens)<br>attempt booted but OOMed under bench |
-| Prefill (8k / 16k / 32k) | — / 6,160 / 8,969; real code 7,697–8,665 | 4,005 / 4,508 / 4,425 | 6,140 / 5,933 / skipped |
-| Decode C=1 (0 / 32k / 1M) | 111.8 / 111.1 / — (128k: 105.6) | 75.8 / 74.8 / 71.7 | 55.5 / skipped / — |
-| Bring-up to READY | 12–18 min to expert promotion armed and warmed (two boots, warm kernel cache) | ~14–17 min on both timed boots<br>(InstantTensor still ~4.5 min);<br>graph capture only 47 s → 13 s warm;<br>page-cache-hot restart including weight load **not** timed | ~25 min |
-| Speculation | DSpark on, 5 drafts (accept 2.4–2.6 tok/step) | DSpark off (it regressed under offload when Pete tried it) | DSpark on (accept 2.3-2.4 tok/step) |
+| Prefill (8k / 16k / 32k) | — / 8,282 / 8,397;<br>real code 7,171–7,419 | 4,005 / 4,508 / 4,425 | 6,140 / 5,933 / skipped |
+| Decode C=1 (0 / 32k / 1M) | 120.9 / 121.5 / — (128k: 120.0) | 75.8 / 74.8 / 71.7 | 55.5 / skipped / — |
+| Bring-up to READY | 4.9 min to expert promotion armed and warmed from nvme1;<br>12–18 min on the two earlier nvme0 boots<br>(warm kernel cache on all three) | ~14–17 min on both timed boots<br>(InstantTensor still ~4.5 min);<br>graph capture only 47 s → 13 s warm;<br>page-cache-hot restart including weight load **not** timed | ~25 min |
+| Speculation | DSpark on, 5 drafts (accept 2.4–2.7 tok/step) | DSpark off (it regressed under offload when Pete tried it) | DSpark on (accept 2.3-2.4 tok/step) |
 
 Image refs behind the short names: `azallaza/ds41-kraken-tp3:20261019.3`
 (`sha256:c4c2de52…`), `localinferencelab/vllm@sha256:f41ca8bb…` for LIL r38,
@@ -94,6 +96,32 @@ step. Against the other routes here, on the repo's usual cells, decode
 at one user is 106–119 tok/s, against UVA's ~75 and EXL3's ~55. More
 detail, the compose deltas, and the caveats:
 [candidates/kraken-1017/README.md](candidates/kraken-1017/README.md).
+
+### Rebench from nvme1 (2026-10-28)
+
+The slow reads were nvme0's random 4 KiB IOPS, so I moved the
+checkpoint to nvme1 (a Crucial T710, on a Gen4 x4 link here), mounted
+it directly without `mergerfs`, and emptied `ENGRAM_RAM_LAYERS`. Both
+Engram tables are now read from the drive, with nothing pinned in RAM.
+Same image, compose and KV pool. I recreated the container and ran the
+same benchmark sequence once promotion was armed.
+
+| | Layer 14 on nvme0 | Layers 1 and 14 in RAM | Both on nvme1 |
+|---|---|---|---|
+| Real-code prefill (105k / 259k / 102k tokens) | 2,917 / 3,789 / 3,842 | 8,574 / 7,697 / 8,665 | 7,171 / 7,272 / 7,419 |
+| 994,842-token needle | pass, 4,675 tok/s | pass, 6,747 tok/s | pass, 6,456 tok/s |
+| Decode 32k, 1 / 4 users | 94.9 / 170.3 | 113.9 / 200.1 | 117.3 / 208.7 |
+| Decode 128k, 1 / 4 users | 92.4 / 179.0 | 118.8 / 193.2 | 122.5 / 194.4 |
+| Engine steps/s at 32k, 1 user | 39.8 | 45.7 | 47.1 |
+| Decode C=1, repo cells (0 / 16k / 32k / 128k) | 104.2 / 104.7 / 105.3 / 101.1 | 111.8 / 119.2 / 111.1 / 105.6 | 120.9 / 118.3 / 121.5 / 120.0 |
+| Container start to promotion armed | 17.7 min | 12.0 min | 4.9 min |
+
+Real-code prefill from nvme1 is 84–94% of the RAM-pinned run. Decode is
+level with it or a few percent ahead, which I would read as noise. Boot
+is the bigger change: the 475 GiB weight read took 77 s instead of
+337–424 s. I did not drop the page cache first, so that is not a
+controlled cold boot, but most of the checkpoint cannot have been
+cached. The stack now serves from nvme1 with both tables on disk.
 
 ### Reasoning can surface as content
 
@@ -263,10 +291,9 @@ upstream as
 
 ## What I'd test next
 
-For Kraken 1017: layer 14 read from nvme1's direct mount instead of RAM,
-to see whether a fast drive matches the RAM-pinned numbers. Also
-BoxTops4Coochie's quality suite on this box (lavd, hotel-lights, long retrieval, long
-generation).
+For Kraken 1017: BoxTops4Coochie's quality suite on this box (lavd,
+hotel-lights, long retrieval, long generation), and a boot timed after
+dropping the page cache, to confirm the 4.9-minute bring-up from nvme1.
 
 Standalone UVA prefill at 64k and above. EXL3's 96k cell landed at
 5,585 tok/s, which is close enough to compare. The 256k/512k/1M UVA
