@@ -38,10 +38,10 @@ one of them adds nothing
 | Serve | his compose at `bcf72fe` plus the deltas in [that directory](candidates/kraken-1017/README.md) | [`compose/`](candidates/uva/compose/) | [`reproduce/compose/`](candidates/exl3/reproduce/compose/) |
 | Checkpoint | official 1017 `1bae0e10` on nvme1,<br>both Engram tables pinned in RAM | official `fb2764a5` | Pollard 3.51 bpw, 48 shards,<br>428.5 GiB, sha-pinned |
 | Image | `ds41-kraken-tp3` tag `20261019.3` | LIL r38, `localinferencelab/vllm` | GHCR `dsv41f-tempo-sm120-tp3`,<br>build recipe in repo |
-| Max context | 1M window (994,842-token needle passed) | 1M window (1M decode cell passed at 1,034,830-token context) | 32k (131k boots, OOMs under bench) |
-| KV pool | 2,185,581 tokens (2.08x 1M), fixed 2.25 GiB per GPU | 2.72M tokens realized on this box<br>(2.60x the 1M ceiling);<br>Pete's Gen5 host: 2.85 GiB ≈ 2.6M tokens | 4 GiB fp8 at 32k;<br>a 7 GiB (reported as 3,479,680 tokens)<br>attempt booted but OOMed under bench |
-| Prefill (8k / 16k / 32k) | — / 7,687 / 9,305;<br>real code 7,538–8,663 | 4,005 / 4,508 / 4,425 | 6,140 / 5,933 / skipped |
-| Decode C=1 (0 / 32k / 1M) | 117.8 / 115.3 / — (128k: 114.7) | 75.8 / 74.8 / 71.7 | 55.5 / skipped / — |
+| Max context | 1M window (994,842-token needle passed) | 1M window (1M decode cell passed at 1,034,830-token context) | 32k with DSpark on;<br>131k serves with DSpark off |
+| KV pool | 2,185,581 tokens (2.08x 1M), fixed 2.25 GiB per GPU | 2.72M tokens realized on this box<br>(2.60x the 1M ceiling);<br>Pete's Gen5 host: 2.85 GiB ≈ 2.6M tokens | 4 GiB fp8 at 32k;<br>7 GiB at 131k (1,776,710 tokens) |
+| Prefill (8k / 16k / 32k) | — / 7,687 / 9,305;<br>real code 7,538–8,663 | 4,005 / 4,508 / 4,425 | 6,140 / 5,933 / 5,888–6,276<br>(131k window, DSpark off) |
+| Decode C=1 (0 / 32k / 1M) | 117.8 / 115.3 / — (128k: 114.7) | 75.8 / 74.8 / 71.7 | 55.5 / 42.6 on the 131k window<br>(DSpark off) / — |
 | Bring-up to READY | 5.6–5.9 min to expert promotion armed and warmed<br>(4.4–4.9 min with nothing pinned);<br>12–18 min on the two earlier nvme0 boots<br>(warm kernel cache on all) | ~14–17 min on both timed boots<br>(InstantTensor still ~4.5 min);<br>graph capture only 47 s → 13 s warm;<br>page-cache-hot restart including weight load **not** timed | ~25 min |
 | Speculation | DSpark on, 5 drafts (accept 2.4–2.7 tok/step) | DSpark off (it regressed under offload when Pete tried it) | DSpark on (accept 2.3-2.4 tok/step) |
 

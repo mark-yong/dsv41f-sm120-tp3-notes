@@ -3,9 +3,9 @@
 I brought up the Pollard 3.51 bpw EXL3 checkpoint of DeepSeek-V4.1-Flash on
 3x RTX PRO 6000 96 GB (Blackwell SM120) with tensor parallelism 3, then
 chased performance through a series of one-change-at-a-time tests labeled
-P0 through P6. Two attempts failed outright (FlashInfer autotune, 131k
-context); both are documented below with the exact errors. Same-box
-comparison against the official-checkpoint UVA route is in
+P0 through P6. This file leads with the two configs that measured
+end-to-end; the tuning history and failed attempts are under History.
+Same-box comparison against the official-checkpoint UVA route is in
 [../uva/benchmarks/COMPARE.md](../uva/benchmarks/COMPARE.md).
 
 I tested the existing 3.51 bpw checkpoint as-is and did not build a
@@ -26,21 +26,86 @@ are in [Router bias not loaded](#router-bias-not-loaded-found-2026-10-18).
 | Rebuild reference | [jakejharris/jspark3-deepseek](https://github.com/jakejharris/jspark3-deepseek) |
 | Day-0 TP2 recipe | [diffbot EXL3 2.0bpw](https://huggingface.co/diffbot/DeepSeek-V4.1-Flash-EXL3-2.0bpw-2x-RTX-PRO-6000), used for the first SM120 TP2 attempt; the working TP3 path is the Tempo rebuild |
 
-## Results (P4)
+## Results
 
-The config I kept: 32,768-token max context, 4 GiB KV pool, measurements at
-16k context and below.
+Two configs measured end-to-end; everything not listed is shared:
 
-- Engram tables in pinned host DDR (`DSV41_ENGRAM_DISK=0`); the P0 default
-  offloaded them to disk
-- Custom all-reduce on; `NCCL_P2P_DISABLE=0`, so P2P is enabled on this box
-- `max-num-seqs=4`, `max-num-batched-tokens=4096`
-- CUDA graphs on (PIECEWISE); only P0 ran eager
-- FlashInfer autotune, JIT, and CuteDSL warmup off
-- Vision and DSpark speculative decoding on (`num_speculative_tokens=5`),
-  same as the rest of the climb
+- **P4, the serve I kept.** 32,768-token max context, 4 GiB KV pool,
+  Engram tables pinned in host DDR (`DSV41_ENGRAM_DISK=0`; the P0 default
+  offloaded them to disk), custom all-reduce on (`NCCL_P2P_DISABLE=0`,
+  so P2P is enabled on this box), `max-num-seqs=4`,
+  `max-num-batched-tokens=4096`, PIECEWISE CUDA graphs (only P0 ran
+  eager), FlashInfer autotune/JIT/CuteDSL warmup off, vision on, DSpark
+  speculative decoding on (`num_speculative_tokens=5`; measured accept
+  2.3-2.4 tokens/step).
+- **131k window.** Same as P4 but: `max_model_len` 131,072, 7 GiB KV
+  (budget 1,776,710 tokens), seqs 2, batched 2048, DSpark off. With
+  DSpark on this window reaches READY then fails its first prefill
+  request with an engine 500 — with or without smaller CUDA graphs.
 
-### Prefill (tok/s)
+### Prefill (client tok/s)
+
+| Config | 8k | 16k | 32k | 64k | 96k |
+|--------|-----|-----|------|------|------|
+| P4, DSpark on | 6,140 | 5,933 | — | — | — |
+| P4, DSpark off | 6,514 | 6,568 | — | — | — |
+| 131k, DSpark off | — | — | 5,888–6,276 | 5,852–6,001 | 5,585 |
+
+The 131k row spans two bench passes of the same config (2026-10-08 and
+2026-10-09, under History); the 96k cell was measured once.
+
+### Decode (aggregate tok/s, `llm-inference-bench` sustained)
+
+| Config | conc=1 | conc=2 | conc=4 |
+|--------|--------|--------|--------|
+| P4, DSpark on, ctx 0 | 55.5 | 108.2 | 200.9 |
+| P4, DSpark on, ctx 16k | 56.0 | 107.5 | 214.2 |
+| P4, DSpark off, ctx 0 | 45.4 | — | — |
+| P4, DSpark off, ctx 16k | 44.1 | — | — |
+| 131k, DSpark off, ctx 32k | 42.6 | — | — |
+| 131k, DSpark off, ctx 64k | 40.2 | — | — |
+
+Reading the tables:
+
+- DSpark buys ~10 tok/s of per-user decode on P4 (~23 engine steps/s at
+  conc 1). Turning it off gains ~400–600 tok/s of prefill and is what
+  lets the 131k window bench at all.
+- I keep P4 with DSpark on as the EXL3 serve. The 131k boot is the
+  long-prefill profile: ~5.9–6.3k client tok/s at 32–64k and 5,585 at
+  96k, decode sloping 42.6 → 40.2 with zero errors — a no-draft slope,
+  not a collapse.
+- On P4, decode cells at 32k error when prompt + 2,048 output tokens
+  crosses the 32,768 `max_model_len` — a bench-matrix artifact; the
+  server stayed up. The 131k runs cap prompts at model length − 64, so
+  no 128k cell exists.
+- What I ran was smoke tests and these tables. Output quality was never
+  measured against the official checkpoint.
+
+## Against the UVA route
+
+The official-checkpoint UVA route measured 7,424 prefill tok/s at 32k and
+4,651 at 1M on [peterkilfeather's Gen5 host](https://gist.github.com/peterkilfeather/7af387df07ff0df2327b8fd7f77596ed)
+(vLLM overlay parking 8.1 GiB/rank of decoder-half routed experts in
+pinned host RAM, DSpark off). His host is PCIe Gen5 x16/x16/x8 with
+377 GiB RAM; this box is PCIe 4.0 x16 NODE, so his absolute numbers are
+not expected to transfer 1:1 (prefill reads the offloaded experts over
+PCIe). Same-box UVA on this Gen4 box (2026-09-22) prefills ~4.3-4.5k at
+16k-128k and decodes ~74-76 per user at 0-32k holding 67-72 out to 1M —
+better decode and a far longer window than EXL3's ~55 decode and 131k
+ceiling that costs DSpark to reach. EXL3's win is short-context prefill.
+Tables: [../uva/benchmarks/COMPARE.md](../uva/benchmarks/COMPARE.md).
+
+## What did not work
+
+- FlashInfer autotune (P5): ~61 minutes of cold mxfp8 autotune, then TP
+  rank 2 died at the barrier; never READY. Detail under History.
+- 131k with DSpark on: engine 500 on the first prefill in every variant
+  tried.
+- ~3.25 bpw quant and P7 (~300k): not attempted.
+
+## History
+
+### Prefill ladder (tok/s)
 
 | Step | Change | 8k | 16k |
 |------|--------|----|-----|
@@ -56,45 +121,6 @@ changed the scheduler knobs in the same step; P2 through P4 each changed
 only the knob listed. The compose file's header comments carry the same
 mapping.
 
-The official-checkpoint UVA route measured 7,424 prefill tok/s at 32k and
-4,651 at 1M on [peterkilfeather's Gen5 host](https://gist.github.com/peterkilfeather/7af387df07ff0df2327b8fd7f77596ed)
-(vLLM overlay parking 8.1 GiB/rank of decoder-half routed experts in pinned
-host RAM, DSpark off). His host is PCIe Gen5 x16/x16/x8 with 377 GiB RAM;
-this box is PCIe 4.0 x16 NODE, so his absolute numbers are not expected to
-transfer 1:1 (prefill reads the offloaded experts over PCIe). The P4 peak
-here is ~6.1k at 8k and ~5.9k at 16k, and no long-context prefill completed:
-P4's gain is measured against this stack's own P0 baseline. Same-box UVA on
-this Gen4 box (2026-09-22) prefills ~4.3-4.5k at 16k-128k, below P4 at
-8k/16k and below Pete's Gen5 6.8-7.4k. Tables:
-[../uva/benchmarks/COMPARE.md](../uva/benchmarks/COMPARE.md).
-
-### Decode (P4, DSpark on, `llm-inference-bench` sustained)
-
-Pete's gist measures decode at 76.3 tok/s per user at 32k up to 85.5 at 1M
-with speculative decoding off. Same-box UVA on this Gen4 box was 74-76 at
-0-32k and 67-72 out to 1M, also DSpark off;
-[../uva/benchmarks/COMPARE.md](../uva/benchmarks/COMPARE.md). The table
-below is EXL3 P4 aggregate completion tok/s; the conc-4 column is four
-users sharing the system.
-
-| ctx \ conc | 1 | 2 | 4 |
-|-------------|---|---|---|
-| 0 | 55.5 | 108.2 | 200.9 |
-| 16k | 56.0 | 107.5 | 214.2 |
-
-- Per-request decode is about 50-56 tok/s.
-- DSpark accept length measured 2.3-2.4 tokens per step (MTP-normalized
-  engine steps about 23 per second at concurrency 1). The DSpark-off
-  A/B is in the 2026-10-08 follow-up below.
-- The 32k decode cells error in the bench matrix when prompt plus 2048
-  output tokens crosses the 32768 `max_model_len`; the server itself stayed
-  up.
-
-One validation caveat: what I ran was smoke tests and these bench tables.
-Nothing here measures output quality against the official checkpoint.
-
-## Failed attempts
-
 ### P5: FlashInfer autotune
 
 Cold mxfp8 autotune ran about 61 minutes, then tensor-parallel rank 2 died
@@ -102,7 +128,7 @@ at the autotune `world.barrier()` (Gloo: connection closed by peer). The
 engine never reached `Application startup complete`. I dropped it rather
 than re-running it for the context climb.
 
-### P6: 131k context
+### P6: 131k context, first round (2026-09-21)
 
 | Attempt | Result |
 |---------|--------|
@@ -117,7 +143,7 @@ attempt.
 
 ### Follow-up, 2026-10-08
 
-Same image, `dsv41-tempo-sm120-tp3:path-a-prime`. Weights were already on
+Same image, `dsv41f-tempo-sm120-tp3:path-a-prime`. Weights were already on
 the NVMe (`/mnt/nvme0`); the SAS path is only the September warm archive.
 
 P4 with DSpark removed, everything else unchanged (32k, 4 GiB KV, Engram
@@ -144,8 +170,10 @@ v2.0.3 (2026-09-27) still serves this 3.51 bpw checkpoint and says it
 does not change quantization. The DSpark-on 131k failure is the prefill
 activation spike, not the weight size.
 
-Same 131k boot, measured again on 2026-10-09 with decode included.
-KV budget was 1,776,710 tokens. `speculative_config` was unset.
+### Follow-up, 2026-10-09
+
+Same 131k boot, measured again with decode included. KV budget
+1,776,710 tokens; `speculative_config` unset.
 
 | | 32k | 64k | 96k |
 |---|---|---|---|
@@ -154,10 +182,8 @@ KV budget was 1,776,710 tokens. `speculative_config` was unset.
 
 96k is under the harness cap (model length minus 64). Both decode
 cells completed with no errors. Accept length was 0 because DSpark was
-off. 40 tok/s is the no-draft slope from ~45 at short context, not a
-collapse, and it is still below P4 with DSpark on (~55). I would keep
-P4 with DSpark on as the EXL3 serve. This 131k boot is the long-prefill
-result: 5,585 tok/s at 96k, next to UVA's roughly 4.5k–5.3k at 16k–32k.
+off. The two passes disagree by about 7% at 32k/64k (5,888/5,852 vs
+6,276/6,001); the Results table reports them as a range.
 
 ## Router bias not loaded (found 2026-10-18)
 
@@ -233,9 +259,9 @@ against the official checkpoint, is the next EXL3 measurement.
 4. For long context on this box, official weights with decoder-half UVA
    expert offload (experts parked from the CED boundary at layer 20) is
    the working decode path. EXL3 at 131k with DSpark off prefilled 32k,
-   64k, and 96k at 6,276 / 6,001 / 5,585, and decoded at 42.6 / 40.2.
-   The same window with DSpark on still dies on the first prefill
-   request. Same-box UVA decode held 67-72 tok/s out to 1M.
+   64k, and 96k at 5,888–6,276 / 5,852–6,001 / 5,585, and decoded at
+   42.6 / 40.2. The same window with DSpark on still dies on the first
+   prefill request. Same-box UVA decode held 67-72 tok/s out to 1M.
 5. Engram holds native table weights rather than EXL3 experts; reuse
    across serve images only works for the same Flash revision, and
    different HF cuts need a config match check.
@@ -355,27 +381,28 @@ Discord, support still none committed):
 - B12X: N/A; the EXL3 path does not use the B12X kernel backend
 - Tested configuration: 3× RTX PRO 6000 96 GB (SM120) on PCIe 4.0 x16,
   NODE topology; NVIDIA driver 615.71.09, CUDA 13.4 user mode; TP3;
-  Pollard 3.51 bpw EXL3 @ `f129e31a…`; fp8 KV (4 GiB); PIECEWISE CUDA
-  graphs; DSpark speculative (`num_speculative_tokens=5`); 32,768
-  max-model-len; compose defaults in `reproduce/compose/`
+  Pollard 3.51 bpw EXL3 @ `f129e31a…`; fp8 KV; PIECEWISE CUDA graphs;
+  32,768 max-model-len with 4 GiB KV and DSpark
+  (`num_speculative_tokens=5`), also validated at 131,072 with 7 GiB KV
+  and DSpark off; compose defaults in `reproduce/compose/`
 - Validation results: `llm-inference-bench` decode matrix (conc 1/2/4 ×
-  context 0/16k, 30 s sustained, 2048 max output tokens) and the prefill
-  ladder at 8k/16k, with no other GPU workloads running; commands in
-  Reproducing step 5
-- Known limitations: no long-context prefill (131k boots but OOMs under
-  bench); same-box UVA decode beats P4 (~75 vs ~55 C=1) and serves 1M,
-  but UVA prefill on this Gen4 box does not beat P4 8k/16k (see
-  [../uva/benchmarks/COMPARE.md](../uva/benchmarks/COMPARE.md)); DSpark net
-  speedup not isolated; 8 GiB KV not usable (see Failed attempts); output
-  quality not tested against the official checkpoint; the router's
-  correction bias is never loaded (see Router bias not loaded; fix in
+  context 0/16k on the 32k config; conc 1 × context 32k/64k on the 131k
+  config) and prefill at 8k/16k (32k config) plus 32k/64k/96k (131k
+  config), 30 s sustained, 2048 max output tokens, with no other GPU
+  workloads running; commands in Reproducing step 5
+- Known limitations: 131k serves only with DSpark off — with DSpark on
+  it fails the first prefill request with an engine 500; same-box UVA
+  decode beats P4 (~75 vs ~55 C=1) and serves 1M (see
+  [../uva/benchmarks/COMPARE.md](../uva/benchmarks/COMPARE.md)); the
+  image never loads the MoE router correction bias (fix open as
   [Zeuss5/cuda-exl3#8](https://github.com/Zeuss5/cuda-exl3/pull/8), not
-  in this image)
+  in this image); output quality never measured against the official
+  checkpoint; 8 GiB KV not usable (see History)
 - Support: none committed. Issues on this repository are accepted but may
   go unanswered; see What I learned for where this route landed on my
   hardware.
 
-4. Serve. The compose file reproduces the final config directly:
+4. Serve. The compose file reproduces the P4 config directly:
 
    ```bash
    cd <this repo>/candidates/exl3/reproduce/compose
@@ -398,15 +425,17 @@ Discord, support still none committed):
    [llm-inference-bench](https://github.com/local-inference-lab/llm-inference-bench)
    (Martin Vit) at commit `d115feee75095081bda2520aa046986a8885f449`
    (2026-09-01): 30 s sustained decode per cell, 2048 max output tokens,
-   decode concurrencies 1/2/4 at context 0 and 16k, engine-default
-   sampling. `reproduce/tools/summarize-prefill.py` reduces a bench result
-   JSON to one line per context;
+   decode concurrencies 1/2/4 at context 0 and 16k on the 32k config,
+   engine-default sampling. `reproduce/tools/summarize-prefill.py`
+   reduces a bench result JSON to one line per context;
    `reproduce/tools/capture-vram.sh <dir>` snapshots `nvidia-smi` and free
    RAM per step.
 
 ---
 
-*Recorded 2026-09-21; same-box UVA comparison added 2026-09-22. Hardware:
-3x RTX PRO 6000 96 GB SM120 on PCIe 4.0 x16, NODE topology (no NVLink/P2P
-at the fabric level; P2P forced in software for the all-reduce step).
-Numbers from `llm-inference-bench` with no other GPU workloads running.*
+*Configs recorded 2026-09-21; same-box UVA comparison added 2026-09-22;
+DSpark-off A/B and the 131k cells added 2026-10-08/09; router-bias
+correction added 2026-10-18. Hardware: 3x RTX PRO 6000 96 GB SM120 on
+PCIe 4.0 x16, NODE topology (no NVLink/P2P at the fabric level; P2P
+forced in software for the all-reduce step). Numbers from
+`llm-inference-bench` with no other GPU workloads running.*
